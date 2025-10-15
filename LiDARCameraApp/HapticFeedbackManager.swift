@@ -8,6 +8,7 @@
 
 import Foundation
 import CoreHaptics
+import UIKit
 
 /// Manages continuous haptic feedback that varies with object proximity
 class HapticFeedbackManager {
@@ -18,8 +19,13 @@ class HapticFeedbackManager {
     private var continuousPlayer: CHHapticAdvancedPatternPlayer?
     private var isRunning = false
 
+    // Fallback to UIImpactFeedbackGenerator if Core Haptics doesn't work
+    private var impactGenerator: UIImpactFeedbackGenerator?
+    private var updateTimer: Timer?
+    private var currentDepth: Float = 0.0
+
     /// Intensity range for haptic feedback (0.0 to 1.0)
-    var minimumIntensity: Float = 0.1
+    var minimumIntensity: Float = 0.3
     var maximumIntensity: Float = 1.0
 
     // MARK: - Initialization
@@ -79,60 +85,102 @@ class HapticFeedbackManager {
 
     /// Starts continuous haptic feedback
     func start() {
-        guard !isRunning else { return }
+        guard !isRunning else {
+            print("⚠️ Haptics already running")
+            return
+        }
+
+        print("🚀 Starting haptics...")
 
         do {
             try startContinuousHaptics()
             isRunning = true
-            print("✅ Continuous haptics started")
+            print("✅ Continuous haptics started successfully")
         } catch {
-            print("❌ Failed to start continuous haptics: \(error)")
+            print("❌ Core Haptics failed: \(error)")
+            print("⚡ Falling back to UIImpactFeedbackGenerator")
+            startFallbackHaptics()
         }
+    }
+
+    private func startFallbackHaptics() {
+        impactGenerator = UIImpactFeedbackGenerator(style: .medium)
+        impactGenerator?.prepare()
+        isRunning = true
+
+        // Create repeating timer for continuous feedback
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let intensity = CGFloat(self.currentDepth)
+            if intensity > 0.1 {
+                self.impactGenerator?.impactOccurred(intensity: intensity)
+                self.impactGenerator?.prepare()
+            }
+        }
+
+        print("✅ Fallback haptics started with timer")
     }
 
     /// Stops continuous haptic feedback
     func stop() {
         guard isRunning else { return }
 
+        // Stop Core Haptics
         do {
             try continuousPlayer?.stop(atTime: CHHapticTimeImmediate)
             continuousPlayer = nil
-            isRunning = false
-            print("🛑 Continuous haptics stopped")
         } catch {
             print("❌ Failed to stop continuous haptics: \(error)")
         }
+
+        // Stop fallback
+        updateTimer?.invalidate()
+        updateTimer = nil
+        impactGenerator = nil
+
+        isRunning = false
+        print("🛑 Continuous haptics stopped")
     }
 
     /// Updates haptic intensity based on depth value (0.0 = far, 1.0 = close)
     /// - Parameter depth: Normalized depth value where higher = closer
     func updateIntensity(forDepth depth: Float) {
-        guard isRunning, let player = continuousPlayer else { return }
+        guard isRunning else {
+            print("⚠️ Cannot update intensity - haptics not running")
+            return
+        }
 
         // Map depth to intensity range
         let intensity = minimumIntensity + (depth * (maximumIntensity - minimumIntensity))
         let clampedIntensity = max(minimumIntensity, min(maximumIntensity, intensity))
 
-        // Create dynamic parameter for intensity
-        let intensityParameter = CHHapticDynamicParameter(
-            parameterID: .hapticIntensityControl,
-            value: clampedIntensity,
-            relativeTime: 0
-        )
+        // Store for fallback generator
+        currentDepth = clampedIntensity
 
-        // Also modulate sharpness for more pronounced feedback when close
-        let sharpness = clampedIntensity * 0.8  // Scale sharpness with intensity
-        let sharpnessParameter = CHHapticDynamicParameter(
-            parameterID: .hapticSharpnessControl,
-            value: sharpness,
-            relativeTime: 0
-        )
+        // Try Core Haptics first
+        if let player = continuousPlayer {
+            // Create dynamic parameter for intensity
+            let intensityParameter = CHHapticDynamicParameter(
+                parameterID: .hapticIntensityControl,
+                value: clampedIntensity,
+                relativeTime: 0
+            )
 
-        do {
-            try player.sendParameters([intensityParameter, sharpnessParameter], atTime: 0)
-        } catch {
-            print("❌ Failed to update haptic intensity: \(error)")
+            // Also modulate sharpness for more pronounced feedback when close
+            let sharpness = clampedIntensity * 0.8
+            let sharpnessParameter = CHHapticDynamicParameter(
+                parameterID: .hapticSharpnessControl,
+                value: sharpness,
+                relativeTime: 0
+            )
+
+            do {
+                try player.sendParameters([intensityParameter, sharpnessParameter], atTime: 0)
+            } catch {
+                print("❌ Failed to update haptic intensity: \(error)")
+            }
         }
+        // Fallback generator updates happen automatically via timer
     }
 
     // MARK: - Private Methods
@@ -142,10 +190,12 @@ class HapticFeedbackManager {
             throw HapticError.engineNotAvailable
         }
 
-        // Create a continuous haptic event
+        print("🔧 Creating continuous haptic pattern...")
+
+        // Create a continuous haptic event with a very long duration
         let intensity = CHHapticEventParameter(
             parameterID: .hapticIntensity,
-            value: minimumIntensity
+            value: 0.5  // Start at medium intensity
         )
 
         let sharpness = CHHapticEventParameter(
@@ -153,12 +203,12 @@ class HapticFeedbackManager {
             value: 0.5
         )
 
-        // Create continuous event (indefinite duration)
+        // Create continuous event with very long duration
         let continuousEvent = CHHapticEvent(
             eventType: .hapticContinuous,
             parameters: [intensity, sharpness],
             relativeTime: 0,
-            duration: 100  // Long duration, will be controlled dynamically
+            duration: 3600  // 1 hour - effectively infinite for our use case
         )
 
         // Create pattern
@@ -167,14 +217,17 @@ class HapticFeedbackManager {
             parameters: []
         )
 
+        print("🔧 Creating advanced player...")
+
         // Create player
         continuousPlayer = try engine.makeAdvancedPlayer(with: pattern)
 
-        // Start playback immediately and loop
+        print("🔧 Starting player...")
+
+        // Start playback immediately
         try continuousPlayer?.start(atTime: CHHapticTimeImmediate)
 
-        // Enable looping
-        continuousPlayer?.loopEnabled = true
+        print("✅ Continuous haptic player started!")
     }
 
     // MARK: - Error
