@@ -25,6 +25,9 @@ class CameraViewController: UIViewController {
     private let depthProcessor = DepthProcessor()
     private let depthVisualizer = DepthVisualizer()
 
+    // Haptic feedback
+    private let hapticManager = HapticFeedbackManager()
+
     // UI components
     private var depthPreviewView: UIImageView!
 
@@ -34,6 +37,14 @@ class CameraViewController: UIViewController {
         super.viewDidLoad()
         setupDepthPreviewView()
         requestCameraAccess()
+
+        // Start continuous haptic feedback
+        hapticManager.start()
+    }
+
+    deinit {
+        // Stop haptics when view controller is deallocated
+        hapticManager.stop()
     }
 
     override func viewWillLayoutSubviews() {
@@ -187,6 +198,13 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
 
         // Process depth data
         let processedDepthMap = depthProcessor.processDepthData(depthData)
+
+        // Sample center depth for haptic feedback
+        let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: 0.15)
+
+        // Update haptic intensity based on proximity
+        // Higher depth value = closer object = stronger vibration
+        hapticManager.updateIntensity(forDepth: centerDepth)
 
         // Get current orientation and screen size
         guard let videoOrientation = previewLayer.connection?.videoOrientation else { return }
