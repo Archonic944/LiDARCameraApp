@@ -11,9 +11,12 @@ import CoreImage
 
 /// Extends CVPixelBuffer with normalization capabilities
 extension CVPixelBuffer {
-    /// Normalizes the pixel buffer values to 0-1 range
-    /// - Note: Modifies the buffer in-place
-    func normalize() {
+    /// Normalizes the pixel buffer values to 0-1 range using fixed range
+    /// - Parameters:
+    ///   - minDisparity: Minimum disparity value (far objects)
+    ///   - maxDisparity: Maximum disparity value (near objects)
+    /// - Note: Modifies the buffer in-place. Values outside range are clamped.
+    func normalize(minDisparity: Float, maxDisparity: Float) {
         let width = CVPixelBufferGetWidth(self)
         let height = CVPixelBufferGetHeight(self)
 
@@ -26,26 +29,19 @@ extension CVPixelBuffer {
         let floatPixels = floatBuffer.assumingMemoryBound(to: Float.self)
         let count = width * height
 
-        // Find min and max values
-        var minVal: Float = Float.greatestFiniteMagnitude
-        var maxVal: Float = -Float.greatestFiniteMagnitude
+        // Normalize to 0-1 range using fixed range
+        let range = maxDisparity - minDisparity
+        guard range > 0 else {
+            CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
+            return
+        }
 
         for i in 0..<count {
             let value = floatPixels[i]
             if value.isFinite {
-                minVal = min(minVal, value)
-                maxVal = max(maxVal, value)
-            }
-        }
-
-        // Normalize to 0-1 range
-        let range = maxVal - minVal
-        if range > 0 {
-            for i in 0..<count {
-                let value = floatPixels[i]
-                if value.isFinite {
-                    floatPixels[i] = (value - minVal) / range
-                }
+                // Normalize and clamp to 0-1 range
+                let normalized = (value - minDisparity) / range
+                floatPixels[i] = max(0.0, min(1.0, normalized))
             }
         }
 
@@ -55,6 +51,16 @@ extension CVPixelBuffer {
 
 /// Processes depth data from AVCaptureDepthDataOutput
 class DepthProcessor {
+
+    // MARK: - Properties
+
+    /// Minimum disparity value for normalization (corresponds to ~5m)
+    /// Disparity is inverse of distance, so lower values = farther objects
+    var minDisparity: Float = 0.2
+
+    /// Maximum disparity value for normalization (corresponds to ~0.5m)
+    /// Higher values = closer objects
+    var maxDisparity: Float = 2.0
 
     // MARK: - Public Methods
 
@@ -66,8 +72,8 @@ class DepthProcessor {
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let depthMap = convertedDepth.depthDataMap
 
-        // Normalize to 0-1 range for visualization
-        depthMap.normalize()
+        // Normalize to 0-1 range using fixed disparity range
+        depthMap.normalize(minDisparity: minDisparity, maxDisparity: maxDisparity)
 
         return depthMap
     }

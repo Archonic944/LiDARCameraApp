@@ -57,13 +57,22 @@ The main view controller that:
 
 Handles:
 - Converting AVDepthData to 32-bit float disparity format
-- Normalizing depth values to 0-1 range
+- Normalizing depth values to 0-1 range using fixed disparity range
 - CVPixelBuffer manipulation
+- Center aperture sampling for haptic feedback
 
 **Key Features**:
 - Extension on CVPixelBuffer for reusable normalization
-- Stateless processing (no instance state)
+- Fixed range normalization for consistent depth visualization
+- Configurable min/max disparity values (default: 0.2 to 2.0)
 - Thread-safe operations
+
+**Normalization Strategy**:
+- Uses **fixed range normalization** instead of per-frame min/max
+- Ensures consistent color mapping across frames
+- Objects at the same distance always show the same color
+- Values outside range are clamped to 0-1
+- Default range: minDisparity=0.2 (~5m), maxDisparity=2.0 (~0.5m)
 
 ### DepthVisualizer.swift
 **Responsibility**: Rendering depth data as visual overlays
@@ -103,7 +112,8 @@ Manages:
 1. **Capture**: AVCaptureDepthDataOutput streams depth frames from LiDAR camera
 2. **Process** (DepthProcessor):
    - Convert to 32-bit floating-point disparity format
-   - Normalize depth values to 0-1 range
+   - Normalize depth values to 0-1 range using fixed disparity range (0.2 to 2.0)
+   - Values are clamped to ensure consistent visualization across frames
    - Sample center aperture for haptic feedback
 3. **Haptic Feedback** (HapticFeedbackManager):
    - Receive average center depth (0.0 = far, 1.0 = close)
@@ -186,7 +196,8 @@ This structure makes the code easier to test, modify, and understand.
 ## Features
 
 - ✅ Real-time LiDAR depth overlay
-- ✅ Color-coded depth visualization
+- ✅ Color-coded depth visualization with fixed range normalization
+- ✅ Consistent depth mapping (same distance = same color across frames)
 - ✅ **Continuous haptic feedback** (walking stick metaphor)
 - ✅ Proximity-based vibration intensity
 - ✅ Object-oriented architecture with separation of concerns
@@ -194,6 +205,7 @@ This structure makes the code easier to test, modify, and understand.
 - ✅ Photo capture with embedded depth data
 - ✅ Transparent overlay (80% opacity) to see camera feed
 - ✅ Configurable color schemes (via DepthVisualizer properties)
+- ✅ Configurable depth range (via DepthProcessor min/maxDisparity properties)
 - ✅ Automatic haptic engine recovery from interruptions
 
 ## Requirements
@@ -217,10 +229,11 @@ None currently.
 
 ### Visualization
 - UI controls for color scheme selection
-- Depth range sliders for custom normalization
+- UI controls for adjusting min/max disparity range in real-time
 - Recording video with depth overlay
 - 3D point cloud visualization
 - Depth map export (as image or data file)
+- Display actual distance values on screen (convert disparity to meters)
 
 ### Code Quality
 - Unit tests for DepthProcessor, DepthVisualizer, and HapticFeedbackManager
