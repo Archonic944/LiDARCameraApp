@@ -212,8 +212,8 @@ extension CameraViewController: GestureManagerDelegate {
             return
         }
 
-        // Calibrate depth range using tapped point
-        depthProcessor.calibrateRange(from: depthData, tapPoint: point, viewSize: view.bounds.size)
+        // Calibrate depth range to current scene (tap location is irrelevant)
+        depthProcessor.calibrateToCurrentFrame(from: depthData)
     }
 }
 

@@ -97,60 +97,73 @@ class DepthProcessor {
         return depthMap
     }
 
-    /// Calibrates the depth range based on a tapped disparity value
-    /// - Parameters:
-    ///   - depthData: Raw depth data from camera
-    ///   - tapPoint: Tap location in normalized coordinates (0-1)
-    ///   - viewSize: Size of the view for coordinate conversion
-    ///   - rangeSpread: How much range to create around tapped value (default: 1.5)
-    /// - Returns: The sampled disparity value, or nil if invalid
-    @discardableResult
-    func calibrateRange(from depthData: AVDepthData, tapPoint: CGPoint, viewSize: CGSize, rangeSpread: Float = 1.5) -> Float? {
+    /// Calibrates the depth range to fit the current frame using statistical analysis
+    /// - Parameter depthData: Raw depth data from camera
+    /// - Note: Uses 5th and 95th percentiles to eliminate outliers
+    func calibrateToCurrentFrame(from depthData: AVDepthData) {
         let depthMap = depthData.depthDataMap
+
+        guard let (p5, p95) = calculatePercentiles(from: depthMap) else {
+            print("⚠️ Could not calculate frame statistics")
+            return
+        }
+
+        // Set range based on percentiles (auto-fit to scene)
+        minDisparity = p5
+        maxDisparity = p95
+
+        print("🎯 Calibrated to scene: P5=\(p5), P95=\(p95) (range: \(p95 - p5))")
+    }
+
+    /// Calculates 5th and 95th percentiles from depth buffer
+    /// - Parameter depthMap: Depth pixel buffer
+    /// - Returns: Tuple of (P5, P95) or nil if calculation fails
+    private func calculatePercentiles(from depthMap: CVPixelBuffer) -> (Float, Float)? {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 
-        // Convert tap point to depth buffer coordinates
-        let normalizedX = tapPoint.x / viewSize.width
-        let normalizedY = tapPoint.y / viewSize.height
-
-        let depthX = Int(normalizedX * CGFloat(width))
-        let depthY = Int(normalizedY * CGFloat(height))
-
-        // Sample depth at tap location
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else {
-            print("⚠️ Could not access depth buffer")
             return nil
         }
 
         let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
-        let index = depthY * width + depthX
+        let count = width * height
 
-        guard index >= 0 && index < width * height else {
-            print("⚠️ Tap point out of bounds")
+        // Collect all valid depth values
+        var validValues: [Float] = []
+        validValues.reserveCapacity(count)
+
+        for i in 0..<count {
+            let value = floatBuffer[i]
+            if value.isFinite && value > 0 {
+                validValues.append(value)
+            }
+        }
+
+        guard !validValues.isEmpty else {
             return nil
         }
 
-        let tappedDisparity = floatBuffer[index]
+        // Sort to calculate percentiles
+        validValues.sort()
 
-        guard tappedDisparity.isFinite else {
-            print("⚠️ Invalid depth at tap location")
-            return nil
+        // Calculate 5th and 95th percentile indices
+        let p5Index = Int(Float(validValues.count) * 0.05)
+        let p95Index = Int(Float(validValues.count) * 0.95)
+
+        let p5 = validValues[p5Index]
+        let p95 = validValues[p95Index]
+
+        // Ensure minimum range
+        if p95 - p5 < 0.1 {
+            let mid = (p5 + p95) / 2
+            return (max(0.1, mid - 0.5), mid + 0.5)
         }
 
-        // Recalibrate range: make tapped depth the midpoint
-        let newMin = max(0.1, tappedDisparity - rangeSpread)
-        let newMax = tappedDisparity + rangeSpread
-
-        minDisparity = newMin
-        maxDisparity = newMax
-
-        print("🎯 Calibrated depth range: \(newMin) to \(newMax) (tapped: \(tappedDisparity))")
-
-        return tappedDisparity
+        return (max(0.1, p5), p95)
     }
 
     /// Samples average depth from a center aperture region

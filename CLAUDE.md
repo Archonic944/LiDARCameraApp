@@ -77,10 +77,10 @@ Handles:
 - Default range: minDisparity=0.2 (~5m), maxDisparity=4.0 (~0.25m)
 
 **Calibration Method**:
-- `calibrateRange(from:tapPoint:viewSize:rangeSpread:)` samples disparity at tap location
-- Converts screen coordinates to depth buffer coordinates
-- Sets new min/max range centered around tapped value
-- Returns sampled disparity value for optional use
+- `calibrateToCurrentFrame(from:)` analyzes entire depth frame
+- `calculatePercentiles(from:)` helper extracts valid values, sorts, and computes P5/P95
+- Sets new min/max range based on scene statistics
+- Ensures minimum range of 0.1 to avoid division by zero
 
 ### DepthVisualizer.swift
 **Responsibility**: Rendering depth data as visual overlays
@@ -248,24 +248,31 @@ None currently.
 ## Technical Notes
 
 ### Tap-to-Calibrate Depth Range
-The app supports dynamic depth range calibration, similar to camera autofocus:
+The app supports scene-adaptive depth range calibration using statistical analysis:
 
 **How It Works**:
-1. Tap anywhere on the screen
-2. App samples the depth (disparity) value at that exact pixel
-3. Recalibrates the min/max disparity range to center around tapped value
-4. Creates a ±1.5 range around the tapped disparity (total range of 3.0)
+1. Tap anywhere on the screen (location is irrelevant - just a trigger)
+2. App analyzes the **entire depth frame** statistically
+3. Calculates 5th percentile (P5) and 95th percentile (P95) of all valid depth values
+4. Sets `minDisparity = P5` and `maxDisparity = P95`
 5. Shows a yellow focus indicator animation for visual feedback
+
+**Statistical Approach**:
+- **Percentile-based outlier rejection**: Uses P5 and P95 instead of min/max
+- **Robust to noise**: Ignores extreme outliers and invalid readings
+- **Scene-adaptive**: Range automatically fits whatever is currently visible
+- **No spatial coupling**: Tap location doesn't matter - full frame is analyzed
 
 **Implementation Details**:
 - `GestureManager` handles tap detection and visual feedback
 - `CameraViewController` implements `GestureManagerDelegate`
-- `DepthProcessor.calibrateRange()` performs the actual calibration
+- `DepthProcessor.calibrateToCurrentFrame()` performs statistical analysis
+- `calculatePercentiles()` scans entire buffer, filters invalid values, sorts, and extracts P5/P95
 - Caches latest `AVDepthData` frame in CameraViewController
 - Focus indicator uses UIView animations (scale + fade)
 - Clean separation: UI (GestureManager) → Controller → Logic (DepthProcessor)
 
-**Use Case**: Point at an object you want to be "neutral" (middle of color range), tap it, and the depth visualization recalibrates so that object appears mid-tone while closer/farther objects shift accordingly.
+**Use Case**: Point camera at a scene, tap anywhere to "lock in" the depth range. All objects in view will be spread across the full color spectrum, ignoring outliers.
 
 ### Core Haptics Continuous Event Limitation
 Core Haptics has a **30-second maximum duration** for continuous haptic events (`CHHapticEvent` with `.hapticContinuous` type). To achieve truly infinite vibration for the walking stick metaphor, the app implements an auto-renewal system:
@@ -291,8 +298,9 @@ This workaround is necessary because setting a longer duration (e.g., 3600s) wil
 - 3D point cloud visualization
 - Depth map export (as image or data file)
 - Display actual distance values on screen (convert disparity to meters)
-- Customizable tap-to-calibrate range spread (currently fixed at ±1.5)
+- Customizable percentile thresholds (currently P5/P95)
 - Double-tap to reset to default range
+- Histogram visualization of depth distribution
 
 ### Code Quality
 - Unit tests for DepthProcessor, DepthVisualizer, and HapticFeedbackManager

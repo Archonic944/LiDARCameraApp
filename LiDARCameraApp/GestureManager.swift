@@ -67,7 +67,7 @@ class GestureManager {
         focusIndicator.center = point
         focusIndicator.isHidden = false
         focusIndicator.alpha = 0
-        focusIndicator.transform = CGAffineTransform(scaleX: 1.5, scaleY: 1.5)
+        focusIndicator.transform = CGAffineTransform(scaleX: 1.5, y: 1.5)
 
         UIView.animate(withDuration: 0.3, animations: {
             self.focusIndicator.alpha = 1.0
