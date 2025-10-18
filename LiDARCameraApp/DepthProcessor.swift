@@ -97,6 +97,62 @@ class DepthProcessor {
         return depthMap
     }
 
+    /// Calibrates the depth range based on a tapped disparity value
+    /// - Parameters:
+    ///   - depthData: Raw depth data from camera
+    ///   - tapPoint: Tap location in normalized coordinates (0-1)
+    ///   - viewSize: Size of the view for coordinate conversion
+    ///   - rangeSpread: How much range to create around tapped value (default: 1.5)
+    /// - Returns: The sampled disparity value, or nil if invalid
+    @discardableResult
+    func calibrateRange(from depthData: AVDepthData, tapPoint: CGPoint, viewSize: CGSize, rangeSpread: Float = 1.5) -> Float? {
+        let depthMap = depthData.depthDataMap
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+
+        // Convert tap point to depth buffer coordinates
+        let normalizedX = tapPoint.x / viewSize.width
+        let normalizedY = tapPoint.y / viewSize.height
+
+        let depthX = Int(normalizedX * CGFloat(width))
+        let depthY = Int(normalizedY * CGFloat(height))
+
+        // Sample depth at tap location
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else {
+            print("⚠️ Could not access depth buffer")
+            return nil
+        }
+
+        let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
+        let index = depthY * width + depthX
+
+        guard index >= 0 && index < width * height else {
+            print("⚠️ Tap point out of bounds")
+            return nil
+        }
+
+        let tappedDisparity = floatBuffer[index]
+
+        guard tappedDisparity.isFinite else {
+            print("⚠️ Invalid depth at tap location")
+            return nil
+        }
+
+        // Recalibrate range: make tapped depth the midpoint
+        let newMin = max(0.1, tappedDisparity - rangeSpread)
+        let newMax = tappedDisparity + rangeSpread
+
+        minDisparity = newMin
+        maxDisparity = newMax
+
+        print("🎯 Calibrated depth range: \(newMin) to \(newMax) (tapped: \(tappedDisparity))")
+
+        return tappedDisparity
+    }
+
     /// Samples average depth from a center aperture region
     /// - Parameters:
     ///   - depthMap: Normalized depth pixel buffer

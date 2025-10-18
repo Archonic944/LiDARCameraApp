@@ -28,14 +28,21 @@ class CameraViewController: UIViewController {
     // Haptic feedback
     private let hapticManager = HapticFeedbackManager()
 
+    // Gesture management
+    private var gestureManager: GestureManager!
+
     // UI components
     private var depthPreviewView: UIImageView!
+
+    // Cached depth data for tap-to-calibrate
+    private var latestDepthData: AVDepthData?
 
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
         setupDepthPreviewView()
+        setupGestureManager()
         requestCameraAccess()
 
         // Start continuous haptic feedback
@@ -60,7 +67,15 @@ class CameraViewController: UIViewController {
         depthPreviewView = UIImageView(frame: view.bounds)
         depthPreviewView.contentMode = .scaleAspectFill
         depthPreviewView.alpha = 0.8  // Partially transparent
+        depthPreviewView.isUserInteractionEnabled = true
         view.addSubview(depthPreviewView)
+    }
+
+    /// Sets up gesture manager for tap-to-calibrate
+    private func setupGestureManager() {
+        gestureManager = GestureManager(parentView: view)
+        gestureManager.delegate = self
+        gestureManager.addTapGesture(to: depthPreviewView)
     }
 
     // MARK: - Camera Permission
@@ -187,6 +202,21 @@ class CameraViewController: UIViewController {
     }
 }
 
+// MARK: - GestureManagerDelegate
+
+extension CameraViewController: GestureManagerDelegate {
+
+    func gestureManager(_ manager: GestureManager, didTapAt point: CGPoint) {
+        guard let depthData = latestDepthData else {
+            print("⚠️ No depth data available for calibration")
+            return
+        }
+
+        // Calibrate depth range using tapped point
+        depthProcessor.calibrateRange(from: depthData, tapPoint: point, viewSize: view.bounds.size)
+    }
+}
+
 // MARK: - AVCaptureDepthDataOutputDelegate
 
 extension CameraViewController: AVCaptureDepthDataOutputDelegate {
@@ -195,6 +225,9 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
                         didOutput depthData: AVDepthData,
                         timestamp: CMTime,
                         connection: AVCaptureConnection) {
+
+        // Cache latest depth data for tap-to-calibrate
+        latestDepthData = depthData
 
         // Process depth data
         let processedDepthMap = depthProcessor.processDepthData(depthData)

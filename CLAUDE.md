@@ -21,17 +21,17 @@ The app follows OOP principles with clear separation of concerns:
 │ - Delegate coordination  │
 └───────┬──────────────────┘
         │ uses
-        ├───────────────────┬──────────────────┐
-        │                   │                  │
-┌───────▼──────────┐  ┌─────▼────────────┐  ┌▼─────────────────┐
-│ DepthProcessor   │  │ DepthVisualizer  │  │ HapticFeedback   │
-├──────────────────┤  ├──────────────────┤  │ Manager          │
-│ - Conversion     │  │ - Color mapping  │  ├──────────────────┤
-│ - Normalization  │  │ - Orientation    │  │ - Continuous     │
-│ - Center sampling│  │ - Scaling/crop   │  │   vibration      │
-└──────────────────┘  │ - Rendering      │  │ - Dynamic        │
-                      └──────────────────┘  │   intensity      │
-                                            └──────────────────┘
+        ├───────────┬──────────────┬──────────────────┐
+        │           │              │                  │
+┌───────▼─────┐  ┌─▼────────────┐ ┌▼─────────────┐  ┌▼─────────────────┐
+│ Depth       │  │ Depth        │ │ Gesture      │  │ HapticFeedback   │
+│ Processor   │  │ Visualizer   │ │ Manager      │  │ Manager          │
+├─────────────┤  ├──────────────┤ ├──────────────┤  ├──────────────────┤
+│ - Convert   │  │ - Color map  │ │ - Tap detect │  │ - Continuous     │
+│ - Normalize │  │ - Orient     │ │ - Focus UI   │  │   vibration      │
+│ - Calibrate │  │ - Scale/crop │ │ - Delegate   │  │ - Dynamic        │
+│ - Sample    │  │ - Render     │ │   pattern    │  │   intensity      │
+└─────────────┘  └──────────────┘ └──────────────┘  └──────────────────┘
 ```
 
 ## Key Components
@@ -53,26 +53,34 @@ The main view controller that:
 - MARK comments for code organization
 
 ### DepthProcessor.swift
-**Responsibility**: Depth data processing and normalization
+**Responsibility**: Depth data processing, normalization, and calibration
 
 Handles:
 - Converting AVDepthData to 32-bit float disparity format
 - Normalizing depth values to 0-1 range using fixed disparity range
 - CVPixelBuffer manipulation
 - Center aperture sampling for haptic feedback
+- **Tap-to-calibrate range adjustment**
 
 **Key Features**:
 - Extension on CVPixelBuffer for reusable normalization
 - Fixed range normalization for consistent depth visualization
-- Configurable min/max disparity values (default: 0.2 to 2.0)
+- Configurable min/max disparity values (default: 0.2 to 4.0)
 - Thread-safe operations
+- `calibrateRange()` method for dynamic range adjustment
 
 **Normalization Strategy**:
 - Uses **fixed range normalization** instead of per-frame min/max
 - Ensures consistent color mapping across frames
 - Objects at the same distance always show the same color
 - Values outside range are clamped to 0-1
-- Default range: minDisparity=0.2 (~5m), maxDisparity=2.0 (~0.5m)
+- Default range: minDisparity=0.2 (~5m), maxDisparity=4.0 (~0.25m)
+
+**Calibration Method**:
+- `calibrateRange(from:tapPoint:viewSize:rangeSpread:)` samples disparity at tap location
+- Converts screen coordinates to depth buffer coordinates
+- Sets new min/max range centered around tapped value
+- Returns sampled disparity value for optional use
 
 ### DepthVisualizer.swift
 **Responsibility**: Rendering depth data as visual overlays
@@ -88,6 +96,21 @@ Manages:
 - Configurable color scheme (farColor, nearColor properties)
 - Reusable CIContext for performance
 - Private helper methods for single-responsibility functions
+
+### GestureManager.swift
+**Responsibility**: Touch gesture handling and visual feedback
+
+Manages:
+- Tap gesture recognition
+- Focus indicator UI (yellow square)
+- Smooth animations (scale + fade)
+- Delegate pattern for gesture events
+
+**Key Features**:
+- Protocol-based communication (`GestureManagerDelegate`)
+- Reusable across different views
+- Camera-like focus indicator animation
+- Handles tap location conversion
 
 ### HapticFeedbackManager.swift
 **Responsibility**: Continuous haptic feedback based on proximity
@@ -199,6 +222,7 @@ This structure makes the code easier to test, modify, and understand.
 
 - ✅ Real-time LiDAR depth overlay
 - ✅ Color-coded depth visualization with fixed range normalization
+- ✅ **Tap-to-calibrate depth range** (like camera autofocus)
 - ✅ Consistent depth mapping (same distance = same color across frames)
 - ✅ **Continuous haptic feedback** (walking stick metaphor)
 - ✅ Proximity-based vibration intensity
@@ -209,6 +233,7 @@ This structure makes the code easier to test, modify, and understand.
 - ✅ Configurable color schemes (via DepthVisualizer properties)
 - ✅ Configurable depth range (via DepthProcessor min/maxDisparity properties)
 - ✅ Automatic haptic engine recovery from interruptions
+- ✅ Visual focus indicator with smooth animations
 
 ## Requirements
 
@@ -221,6 +246,26 @@ This structure makes the code easier to test, modify, and understand.
 None currently.
 
 ## Technical Notes
+
+### Tap-to-Calibrate Depth Range
+The app supports dynamic depth range calibration, similar to camera autofocus:
+
+**How It Works**:
+1. Tap anywhere on the screen
+2. App samples the depth (disparity) value at that exact pixel
+3. Recalibrates the min/max disparity range to center around tapped value
+4. Creates a ±1.5 range around the tapped disparity (total range of 3.0)
+5. Shows a yellow focus indicator animation for visual feedback
+
+**Implementation Details**:
+- `GestureManager` handles tap detection and visual feedback
+- `CameraViewController` implements `GestureManagerDelegate`
+- `DepthProcessor.calibrateRange()` performs the actual calibration
+- Caches latest `AVDepthData` frame in CameraViewController
+- Focus indicator uses UIView animations (scale + fade)
+- Clean separation: UI (GestureManager) → Controller → Logic (DepthProcessor)
+
+**Use Case**: Point at an object you want to be "neutral" (middle of color range), tap it, and the depth visualization recalibrates so that object appears mid-tone while closer/farther objects shift accordingly.
 
 ### Core Haptics Continuous Event Limitation
 Core Haptics has a **30-second maximum duration** for continuous haptic events (`CHHapticEvent` with `.hapticContinuous` type). To achieve truly infinite vibration for the walking stick metaphor, the app implements an auto-renewal system:
@@ -242,11 +287,12 @@ This workaround is necessary because setting a longer duration (e.g., 3600s) wil
 
 ### Visualization
 - UI controls for color scheme selection
-- UI controls for adjusting min/max disparity range in real-time
 - Recording video with depth overlay
 - 3D point cloud visualization
 - Depth map export (as image or data file)
 - Display actual distance values on screen (convert disparity to meters)
+- Customizable tap-to-calibrate range spread (currently fixed at ±1.5)
+- Double-tap to reset to default range
 
 ### Code Quality
 - Unit tests for DepthProcessor, DepthVisualizer, and HapticFeedbackManager
