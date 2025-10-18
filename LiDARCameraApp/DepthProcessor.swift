@@ -47,6 +47,25 @@ extension CVPixelBuffer {
 
         CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
     }
+    
+    func square(){
+        let width = CVPixelBufferGetWidth(self)
+        let height = CVPixelBufferGetHeight(self)
+        
+        CVPixelBufferLockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
+        guard let floatBuffer = CVPixelBufferGetBaseAddress(self) else{
+            CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
+            return
+        }
+        let floatPixels = floatBuffer.assumingMemoryBound(to: Float.self)
+        let count = width * height
+        
+        for i in 0..<count {
+            floatPixels[i] *= floatPixels[i]
+        }
+        
+        CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
+    }
 }
 
 /// Processes depth data from AVCaptureDepthDataOutput
@@ -60,7 +79,7 @@ class DepthProcessor {
 
     /// Maximum disparity value for normalization (corresponds to ~0.5m)
     /// Higher values = closer objects
-    var maxDisparity: Float = 2.0
+    var maxDisparity: Float = 4.0
 
     // MARK: - Public Methods
 
