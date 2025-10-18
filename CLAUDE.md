@@ -148,9 +148,11 @@ The haptic feedback system acts like a "walking stick for the blind":
 
 **Technical Implementation**:
 - Uses Core Haptics for precise control
-- Continuous haptic pattern with dynamic parameters
+- Continuous haptic pattern (30s max duration per Apple's limit)
+- Auto-renewal system: restarts pattern every 28s for truly infinite vibration
 - Handles engine interruptions (backgrounding, calls)
 - Intensity and sharpness modulation
+- Timer-based renewal to work around Core Haptics 30s continuous event limit
 
 **Aperture Sampling**:
 ```
@@ -217,6 +219,17 @@ This structure makes the code easier to test, modify, and understand.
 ## Known Issues
 
 None currently.
+
+## Technical Notes
+
+### Core Haptics Continuous Event Limitation
+Core Haptics has a **30-second maximum duration** for continuous haptic events (`CHHapticEvent` with `.hapticContinuous` type). To achieve truly infinite vibration for the walking stick metaphor, the app implements an auto-renewal system:
+
+1. Creates a 30-second continuous haptic pattern
+2. Schedules a timer to restart the pattern every 28 seconds
+3. Seamlessly transitions between patterns for uninterrupted feedback
+
+This workaround is necessary because setting a longer duration (e.g., 3600s) will cause the haptic to stop after 30 seconds despite the specified value.
 
 ## Future Enhancements
 

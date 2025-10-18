@@ -24,8 +24,12 @@ class HapticFeedbackManager {
     private var updateTimer: Timer?
     private var currentDepth: Float = 0.0
 
+    // Timer to restart continuous haptic before it expires (30s max duration)
+    private var renewalTimer: Timer?
+
     /// Intensity range for haptic feedback (0.0 to 1.0)
-    var minimumIntensity: Float = 0.3
+    /// Note: Values below ~0.4 may not produce perceptible vibration on some devices
+    var minimumIntensity: Float = 0.2
     var maximumIntensity: Float = 1.0
 
     // MARK: - Initialization
@@ -138,6 +142,10 @@ class HapticFeedbackManager {
         updateTimer = nil
         impactGenerator = nil
 
+        // Stop renewal timer
+        renewalTimer?.invalidate()
+        renewalTimer = nil
+
         isRunning = false
         print("🛑 Continuous haptics stopped")
     }
@@ -154,6 +162,9 @@ class HapticFeedbackManager {
         let intensity = minimumIntensity + (depth * (maximumIntensity - minimumIntensity))
         let clampedIntensity = max(minimumIntensity, min(maximumIntensity, intensity))
 
+        // DEBUG: Log intensity values
+        print("🔊 Haptic intensity: \(clampedIntensity) (from depth: \(depth))")
+
         // Store for fallback generator
         currentDepth = clampedIntensity
 
@@ -166,16 +177,8 @@ class HapticFeedbackManager {
                 relativeTime: 0
             )
 
-            // Also modulate sharpness for more pronounced feedback when close
-            let sharpness = clampedIntensity * 0.8
-            let sharpnessParameter = CHHapticDynamicParameter(
-                parameterID: .hapticSharpnessControl,
-                value: sharpness,
-                relativeTime: 0
-            )
-
             do {
-                try player.sendParameters([intensityParameter, sharpnessParameter], atTime: 0)
+                try player.sendParameters([intensityParameter], atTime: 0)
             } catch {
                 print("❌ Failed to update haptic intensity: \(error)")
             }
@@ -200,15 +203,15 @@ class HapticFeedbackManager {
 
         let sharpness = CHHapticEventParameter(
             parameterID: .hapticSharpness,
-            value: 0.5
+            value: 0.73
         )
 
-        // Create continuous event with very long duration
+        // Create continuous event with 30s duration (Core Haptics max for continuous events)
         let continuousEvent = CHHapticEvent(
             eventType: .hapticContinuous,
             parameters: [intensity, sharpness],
             relativeTime: 0,
-            duration: 3600  // 1 hour - effectively infinite for our use case
+            duration: 30.0  // 30 seconds - maximum for continuous haptic events
         )
 
         // Create pattern
@@ -228,6 +231,35 @@ class HapticFeedbackManager {
         try continuousPlayer?.start(atTime: CHHapticTimeImmediate)
 
         print("✅ Continuous haptic player started!")
+
+        // Set up auto-renewal timer to restart before the 30s limit
+        // Restart at 28s to give time for transition
+        scheduleRenewal()
+    }
+
+    /// Schedules automatic renewal of the continuous haptic pattern
+    private func scheduleRenewal() {
+        // Cancel existing timer if any
+        renewalTimer?.invalidate()
+
+        // Restart pattern every 28 seconds (before the 30s limit)
+        renewalTimer = Timer.scheduledTimer(withTimeInterval: 28.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isRunning else { return }
+
+            print("🔄 Renewing continuous haptic pattern...")
+
+            do {
+                // Stop current player
+                try self.continuousPlayer?.stop(atTime: CHHapticTimeImmediate)
+
+                // Restart with new pattern
+                try self.startContinuousHaptics()
+
+                print("✅ Haptic pattern renewed successfully")
+            } catch {
+                print("❌ Failed to renew haptic pattern: \(error)")
+            }
+        }
     }
 
     // MARK: - Error

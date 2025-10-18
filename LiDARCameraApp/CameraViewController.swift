@@ -202,6 +202,9 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Sample center depth for haptic feedback
         let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: 0.15)
 
+        // DEBUG: Log depth values
+        print("📊 Center depth (normalized): \(centerDepth)")
+
         // Update haptic intensity based on proximity
         // Higher depth value = closer object = stronger vibration
         hapticManager.updateIntensity(forDepth: centerDepth)
