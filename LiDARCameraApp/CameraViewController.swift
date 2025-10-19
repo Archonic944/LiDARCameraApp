@@ -26,6 +26,10 @@ class CameraViewController: UIViewController {
     // Depth processing components
     private let depthProcessor = DepthProcessor()
     private let depthVisualizer = DepthVisualizer()
+    private let edgeDetector = EdgeDetector()
+
+    // Cached edge map (for future use)
+    private var latestEdgeMap: CVPixelBuffer?
 
     // Haptic feedback
     private let hapticManager = HapticFeedbackManager()
@@ -239,6 +243,9 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
 
         // Process depth data
         let processedDepthMap = depthProcessor.processDepthData(depthData)
+
+        // Detect edges in depth map (Xia2017 algorithm)
+        latestEdgeMap = edgeDetector.detectEdges(from: processedDepthMap)
 
         // Sample center depth for haptic feedback
         let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: APERTURE_SIZE)
