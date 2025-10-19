@@ -101,7 +101,9 @@ class DepthProcessor {
     /// - Parameter depthData: Raw depth data from camera
     /// - Note: Uses 5th and 95th percentiles to eliminate outliers
     func calibrateToCurrentFrame(from depthData: AVDepthData) {
-        let depthMap = depthData.depthDataMap
+        // Convert to 32-bit floating-point disparity format
+        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        let depthMap = convertedDepth.depthDataMap
 
         guard let (p5, p95) = calculatePercentiles(from: depthMap) else {
             print("⚠️ Could not calculate frame statistics")
