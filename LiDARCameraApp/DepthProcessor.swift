@@ -74,7 +74,7 @@ class DepthProcessor {
     // MARK: - Properties
 
     /// Default minimum disparity value (corresponds to ~5m)
-    private let defaultMinDisparity: Float = 0.2
+    private let defaultMinDisparity: Float = 0.05
 
     /// Default maximum disparity value (corresponds to ~0.25m)
     private let defaultMaxDisparity: Float = 4.0
