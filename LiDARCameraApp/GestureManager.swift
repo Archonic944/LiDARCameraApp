@@ -10,6 +10,7 @@ import UIKit
 /// Protocol for gesture events
 protocol GestureManagerDelegate: AnyObject {
     func gestureManager(_ manager: GestureManager, didTapAt point: CGPoint)
+    func gestureManagerDidDoubleTap(_ manager: GestureManager)
 }
 
 /// Manages tap gestures and focus indicator animations
@@ -42,10 +43,20 @@ class GestureManager {
         parentView.addSubview(focusIndicator)
     }
 
-    /// Adds tap gesture recognizer to the specified view
+    /// Adds tap gesture recognizers to the specified view
     func addTapGesture(to view: UIView) {
+        // Single tap gesture
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tapGesture.numberOfTapsRequired = 1
         view.addGestureRecognizer(tapGesture)
+
+        // Double tap gesture
+        let doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTapGesture.numberOfTapsRequired = 2
+        view.addGestureRecognizer(doubleTapGesture)
+
+        // Require double tap to fail before single tap fires (prevents both from firing)
+        tapGesture.require(toFail: doubleTapGesture)
     }
 
     // MARK: - Gesture Handling
@@ -59,6 +70,11 @@ class GestureManager {
 
         // Notify delegate
         delegate?.gestureManager(self, didTapAt: tapPoint)
+    }
+
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        // Notify delegate (no visual feedback needed for reset)
+        delegate?.gestureManagerDidDoubleTap(self)
     }
 
     // MARK: - Visual Feedback

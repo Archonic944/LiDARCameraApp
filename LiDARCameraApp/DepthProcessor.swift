@@ -73,6 +73,12 @@ class DepthProcessor {
 
     // MARK: - Properties
 
+    /// Default minimum disparity value (corresponds to ~5m)
+    private let defaultMinDisparity: Float = 0.2
+
+    /// Default maximum disparity value (corresponds to ~0.25m)
+    private let defaultMaxDisparity: Float = 4.0
+
     /// Minimum disparity value for normalization (corresponds to ~5m)
     /// Disparity is inverse of distance, so lower values = farther objects
     var minDisparity: Float = 0.2
@@ -115,6 +121,13 @@ class DepthProcessor {
         maxDisparity = p95
 
         print("🎯 Calibrated to scene: P5=\(p5), P95=\(p95) (range: \(p95 - p5))")
+    }
+
+    /// Resets the depth range to default values
+    func resetToDefaultRange() {
+        minDisparity = defaultMinDisparity
+        maxDisparity = defaultMaxDisparity
+        print("🔄 Reset to defaults: min=\(defaultMinDisparity), max=\(defaultMaxDisparity)")
     }
 
     /// Calculates 5th and 95th percentiles from depth buffer

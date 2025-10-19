@@ -203,7 +203,7 @@ class HapticFeedbackManager {
 
         let sharpness = CHHapticEventParameter(
             parameterID: .hapticSharpness,
-            value: 0.73
+            value: 0.4
         )
 
         // Create continuous event with 30s duration (Core Haptics max for continuous events)

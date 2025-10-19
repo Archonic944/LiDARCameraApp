@@ -20,6 +20,8 @@ class CameraViewController: UIViewController {
     private var photoOutput = AVCapturePhotoOutput()
     private var depthOutput = AVCaptureDepthDataOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer!
+    
+    private final var APERTURE_SIZE = 0.05
 
     // Depth processing components
     private let depthProcessor = DepthProcessor()
@@ -215,6 +217,12 @@ extension CameraViewController: GestureManagerDelegate {
         // Calibrate depth range to current scene (tap location is irrelevant)
         depthProcessor.calibrateToCurrentFrame(from: depthData)
     }
+
+    func gestureManagerDidDoubleTap(_ manager: GestureManager) {
+        // Reset to default depth range
+        depthProcessor.resetToDefaultRange()
+        print("🔄 Reset depth range to default values")
+    }
 }
 
 // MARK: - AVCaptureDepthDataOutputDelegate
@@ -233,7 +241,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         let processedDepthMap = depthProcessor.processDepthData(depthData)
 
         // Sample center depth for haptic feedback
-        let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: 0.15)
+        let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: APERTURE_SIZE)
 
         // DEBUG: Log depth values
         print("📊 Center depth (normalized): \(centerDepth)")
