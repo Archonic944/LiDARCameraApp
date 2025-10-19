@@ -96,7 +96,7 @@ class DepthProcessor {
         // Convert to 32-bit floating-point disparity format
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let depthMap = convertedDepth.depthDataMap
-
+        depthMap.square()
         // Normalize to 0-1 range using fixed disparity range
         depthMap.normalize(minDisparity: minDisparity, maxDisparity: maxDisparity)
 

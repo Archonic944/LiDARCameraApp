@@ -30,7 +30,7 @@ class HapticFeedbackManager {
     /// Intensity range for haptic feedback (0.0 to 1.0)
     /// Note: Values below ~0.4 may not produce perceptible vibration on some devices
     var minimumIntensity: Float = 0.2
-    var maximumIntensity: Float = 1.0
+    var maximumIntensity: Float = 1.5
 
     // MARK: - Initialization
 
@@ -176,6 +176,8 @@ class HapticFeedbackManager {
                 value: clampedIntensity,
                 relativeTime: 0
             )
+            
+            
 
             do {
                 try player.sendParameters([intensityParameter], atTime: 0)
