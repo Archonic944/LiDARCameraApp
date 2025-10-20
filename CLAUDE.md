@@ -21,17 +21,17 @@ The app follows OOP principles with clear separation of concerns:
 │ - Delegate coordination  │
 └───────┬──────────────────┘
         │ uses
-        ├───────────┬──────────────┬──────────────────┐
-        │           │              │                  │
-┌───────▼─────┐  ┌─▼────────────┐ ┌▼─────────────┐  ┌▼─────────────────┐
-│ Depth       │  │ Depth        │ │ Gesture      │  │ HapticFeedback   │
-│ Processor   │  │ Visualizer   │ │ Manager      │  │ Manager          │
-├─────────────┤  ├──────────────┤ ├──────────────┤  ├──────────────────┤
-│ - Convert   │  │ - Color map  │ │ - Tap detect │  │ - Continuous     │
-│ - Normalize │  │ - Orient     │ │ - Focus UI   │  │   vibration      │
-│ - Calibrate │  │ - Scale/crop │ │ - Delegate   │  │ - Dynamic        │
-│ - Sample    │  │ - Render     │ │   pattern    │  │   intensity      │
-└─────────────┘  └──────────────┘ └──────────────┘  └──────────────────┘
+        ├───────────┬──────────────┬──────────────────┬──────────────────┐
+        │           │              │                  │                  │
+┌───────▼─────┐  ┌─▼────────────┐ ┌▼─────────────┐  ┌▼─────────────────┐ ┌▼─────────────┐
+│ Depth       │  │ Depth        │ │ Edge         │  │ Gesture          │ │ Haptic       │
+│ Processor   │  │ Visualizer   │ │ Detector     │  │ Manager          │ │ Feedback Mgr │
+├─────────────┤  ├──────────────┤ ├──────────────┤  ├──────────────────┤ ├──────────────┤
+│ - Convert   │  │ - Color map  │ │ - Edge index │  │ - Tap/double tap │ │ - Continuous │
+│ - Normalize │  │ - Orient     │ │ - Gradients  │  │ - Focus UI       │ │   vibration  │
+│ - Calibrate │  │ - Scale/crop │ │ - Eigenvalue │  │ - Delegate       │ │ - Dynamic    │
+│ - Sample    │  │ - Render     │ │ - NMS        │  │   pattern        │ │   intensity  │
+└─────────────┘  └──────────────┘ └──────────────┘  └──────────────────┘ └──────────────┘
 ```
 
 ## Key Components
@@ -97,20 +97,46 @@ Manages:
 - Reusable CIContext for performance
 - Private helper methods for single-responsibility functions
 
+### EdgeDetector.swift
+**Responsibility**: Real-time edge detection in depth maps
+
+Implements Xia & Wang (2017) algorithm for extracting geometric discontinuities (edges) from LiDAR depth data.
+
+**Algorithm Overview**:
+The Xia2017 algorithm detects edges by measuring how each point is displaced from its local geometric centroid, then analyzing how these displacements change spatially to define gradients. A gradient matrix M is constructed from gradient products and smoothed with a Gaussian kernel. Edge detection uses the eigenvalue ratio Tr(M)³/Det(M): when eigenvalues are large, this ratio exceeds a threshold, identifying edge candidates. Non-maximum suppression thins edges to single-pixel width.
+
+**Implementation Details**:
+- Adapted for iPhone LiDAR's organized depth maps (2.5D) rather than unorganized 3D point clouds
+- Neighborhood radius: 5 pixels (reduced from paper's 0.15m)
+- Minimum neighbors: 15 (reduced from paper's 30)
+- Processes in pixel space (x, y, depth) for efficiency
+- Gaussian smoothing: σ=1.0, 2-pixel radius
+- Eigenvalue threshold: 80 (lowered from 100 for mobile data sensitivity)
+- Outputs normalized edge strength map (0-1 range) as CVPixelBuffer
+
+**Processing Steps**:
+1. Calculate edge index (displacement from local centroid) for all pixels
+2. Compute 3D gradients (Ix, Iy, Iz) based on edge index differences
+3. Build and smooth gradient matrix M
+4. Detect edges using eigenvalue ratio analysis
+5. Apply non-maximum suppression along gradient direction
+
 ### GestureManager.swift
 **Responsibility**: Touch gesture handling and visual feedback
 
 Manages:
-- Tap gesture recognition
+- Single and double tap gesture recognition
 - Focus indicator UI (yellow square)
 - Smooth animations (scale + fade)
 - Delegate pattern for gesture events
 
 **Key Features**:
 - Protocol-based communication (`GestureManagerDelegate`)
+- Single tap: triggers depth range calibration
+- Double tap: resets to default depth range
 - Reusable across different views
 - Camera-like focus indicator animation
-- Handles tap location conversion
+- Proper gesture conflict resolution (single tap waits for double tap to fail)
 
 ### HapticFeedbackManager.swift
 **Responsibility**: Continuous haptic feedback based on proximity
@@ -135,19 +161,26 @@ Manages:
 1. **Capture**: AVCaptureDepthDataOutput streams depth frames from LiDAR camera
 2. **Process** (DepthProcessor):
    - Convert to 32-bit floating-point disparity format
-   - Normalize depth values to 0-1 range using fixed disparity range (0.2 to 2.0)
+   - Normalize depth values to 0-1 range using fixed disparity range (0.2 to 4.0)
    - Values are clamped to ensure consistent visualization across frames
    - Sample center aperture for haptic feedback
-3. **Haptic Feedback** (HapticFeedbackManager):
+3. **Edge Detection** (EdgeDetector):
+   - Detect geometric discontinuities using Xia2017 algorithm
+   - Calculate edge indices (displacement from local centroid)
+   - Compute 3D gradients and build gradient matrix
+   - Apply eigenvalue ratio analysis for edge detection
+   - Non-maximum suppression for clean edges
+   - Store edge map for future use
+4. **Haptic Feedback** (HapticFeedbackManager):
    - Receive average center depth (0.0 = far, 1.0 = close)
    - Update continuous vibration intensity
    - Stronger vibration for closer objects
-4. **Visualize** (DepthVisualizer):
+5. **Visualize** (DepthVisualizer):
    - Apply false color filter (blue→red gradient)
    - Apply orientation transform
    - Scale and crop to screen size
    - Render to CGImage
-5. **Display**: Update UIImageView on main thread
+6. **Display**: Update UIImageView on main thread
 
 ### Orientation Handling
 
@@ -222,7 +255,9 @@ This structure makes the code easier to test, modify, and understand.
 
 - ✅ Real-time LiDAR depth overlay
 - ✅ Color-coded depth visualization with fixed range normalization
-- ✅ **Tap-to-calibrate depth range** (like camera autofocus)
+- ✅ **Real-time edge detection** using Xia2017 algorithm
+- ✅ **Tap-to-calibrate depth range** (single tap)
+- ✅ **Double-tap to reset** depth range to defaults
 - ✅ Consistent depth mapping (same distance = same color across frames)
 - ✅ **Continuous haptic feedback** (walking stick metaphor)
 - ✅ Proximity-based vibration intensity
@@ -246,6 +281,29 @@ This structure makes the code easier to test, modify, and understand.
 None currently.
 
 ## Technical Notes
+
+### Edge Detection (Xia2017)
+The app implements real-time edge detection based on Xia & Wang's 2017 paper "A Fast Edge Extraction Method for Mobile Lidar Point Clouds."
+
+**How It Works**:
+1. **Edge Index**: For each pixel, calculate displacement from local geometric centroid (nearby pixels)
+2. **Gradients**: Compute 3D gradients (Ix, Iy, Iz) based on how edge indices change spatially
+3. **Gradient Matrix**: Build matrix M from gradient products (Ix², IxIy, IxIz, etc.)
+4. **Gaussian Smoothing**: Smooth M to prevent singularities (Det(M) = 0)
+5. **Eigenvalue Analysis**: Calculate ratio Tr(M)³/Det(M); high values indicate edges
+6. **Non-Maximum Suppression**: Thin edges to single-pixel width along gradient direction
+
+**Key Insight**: Edges (surface boundaries and intersections) have large eigenvalues in their gradient distributions. The trace/determinant ratio amplifies this signal without computing expensive SVD.
+
+**Adaptations for Mobile**:
+- Smaller neighborhoods (5px radius vs 0.15m) for lower resolution depth maps
+- Pixel-space processing (x, y, depth) instead of full 3D world coordinates
+- Fixed Gaussian parameters for consistent real-time performance
+- Lower threshold (80 vs 100) for noisier mobile LiDAR data
+
+**Output**: Normalized edge strength map (CVPixelBuffer, 0-1 range) cached in `latestEdgeMap`
+
+## Technical Notes (Continued)
 
 ### Tap-to-Calibrate Depth Range
 The app supports scene-adaptive depth range calibration using statistical analysis:
