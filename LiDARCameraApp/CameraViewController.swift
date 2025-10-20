@@ -39,6 +39,7 @@ class CameraViewController: UIViewController {
 
     // UI components
     private var depthPreviewView: UIImageView!
+    private var edgePreviewView: UIImageView!
 
     // Cached depth data for tap-to-calibrate
     private var latestDepthData: AVDepthData?
@@ -48,6 +49,7 @@ class CameraViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         setupDepthPreviewView()
+        setupEdgePreviewView()
         setupGestureManager()
         requestCameraAccess()
 
@@ -64,6 +66,7 @@ class CameraViewController: UIViewController {
         super.viewWillLayoutSubviews()
         previewLayer?.frame = view.bounds
         depthPreviewView?.frame = view.bounds
+        edgePreviewView?.frame = view.bounds
     }
 
     // MARK: - Setup
@@ -73,15 +76,24 @@ class CameraViewController: UIViewController {
         depthPreviewView = UIImageView(frame: view.bounds)
         depthPreviewView.contentMode = .scaleAspectFill
         depthPreviewView.alpha = 0.8  // Partially transparent
-        depthPreviewView.isUserInteractionEnabled = true
+        depthPreviewView.isUserInteractionEnabled = false
         view.addSubview(depthPreviewView)
+    }
+
+    /// Sets up the edge preview overlay
+    private func setupEdgePreviewView() {
+        edgePreviewView = UIImageView(frame: view.bounds)
+        edgePreviewView.contentMode = .scaleAspectFill
+        edgePreviewView.alpha = 1.0  // Fully opaque for edges
+        edgePreviewView.isUserInteractionEnabled = true
+        view.addSubview(edgePreviewView)
     }
 
     /// Sets up gesture manager for tap-to-calibrate
     private func setupGestureManager() {
         gestureManager = GestureManager(parentView: view)
         gestureManager.delegate = self
-        gestureManager.addTapGesture(to: depthPreviewView)
+        gestureManager.addTapGesture(to: edgePreviewView)
     }
 
     // MARK: - Camera Permission
@@ -268,9 +280,22 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
             targetSize: viewSize
         ) else { return }
 
+        // Visualize edge map (if available)
+        var edgeImage: CGImage?
+        if let edgeMap = latestEdgeMap {
+            edgeImage = depthVisualizer.visualizeDepth(
+                depthMap: edgeMap,
+                orientation: videoOrientation,
+                targetSize: viewSize
+            )
+        }
+
         // Update UI on main thread
         Task { @MainActor in
             self.depthPreviewView.image = UIImage(cgImage: depthImage)
+            if let edgeImage = edgeImage {
+                self.edgePreviewView.image = UIImage(cgImage: edgeImage)
+            }
         }
     }
 }
