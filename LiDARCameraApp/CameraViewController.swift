@@ -283,8 +283,8 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Visualize edge map (if available)
         var edgeImage: CGImage?
         if let edgeMap = latestEdgeMap {
-            edgeImage = depthVisualizer.visualizeDepth(
-                depthMap: edgeMap,
+            edgeImage = depthVisualizer.visualizeEdges(
+                edgeMap: edgeMap,
                 orientation: videoOrientation,
                 targetSize: viewSize
             )
