@@ -74,10 +74,13 @@ class DepthProcessor {
     // MARK: - Properties
 
     /// Default minimum disparity value (corresponds to ~5m)
-    private let defaultMinDisparity: Float = 0.05
+    public static var defaultMinDisparity: Float = 0.05
 
     /// Default maximum disparity value (corresponds to ~0.25m)
-    private let defaultMaxDisparity: Float = 4.0
+    public static var defaultMaxDisparity: Float = 4.0
+    
+    /// Aperture size; the radius of the region sampled (0-1)
+    public static var APERTURE_SIZE = 0.2
 
     /// Minimum disparity value for normalization (corresponds to ~5m)
     /// Disparity is inverse of distance, so lower values = farther objects
@@ -96,7 +99,7 @@ class DepthProcessor {
         // Convert to 32-bit floating-point disparity format
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let depthMap = convertedDepth.depthDataMap
-        depthMap.square()
+        //depthMap.square()
         // Normalize to 0-1 range using fixed disparity range
         depthMap.normalize(minDisparity: minDisparity, maxDisparity: maxDisparity)
 
@@ -186,7 +189,7 @@ class DepthProcessor {
     ///   - depthMap: Normalized depth pixel buffer
     ///   - apertureSize: Size of the center region to sample (0.0 to 1.0, as fraction of image)
     /// - Returns: Average normalized depth value (0.0 = far, 1.0 = close)
-    func sampleCenterDepth(from depthMap: CVPixelBuffer, apertureSize: CGFloat = 0.1) -> Float {
+    func sampleCenterDepth(from depthMap: CVPixelBuffer, apertureSize: CGFloat = APERTURE_SIZE) -> Float {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 

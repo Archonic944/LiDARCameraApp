@@ -22,8 +22,6 @@ class CameraViewController: UIViewController {
     private var videoOutput = AVCaptureVideoDataOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer!
 
-    private final var APERTURE_SIZE = 0.05
-
     // Depth processing components
     private let depthProcessor = DepthProcessor()
     private let depthVisualizer = DepthVisualizer()
@@ -324,7 +322,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         }
 
         // Sample center depth for haptic feedback
-        let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: APERTURE_SIZE)
+        let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap)
 
         // Update haptic intensity based on proximity
         // Higher depth value = closer object = stronger vibration
