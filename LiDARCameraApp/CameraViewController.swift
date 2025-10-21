@@ -45,6 +45,12 @@ class CameraViewController: UIViewController {
     // UI components
     private var depthPreviewView: UIImageView!
     private var edgePreviewView: UIImageView!
+    private var controlsContainer: UIView!
+    private var minLabel: UILabel!
+    private var maxLabel: UILabel!
+    private var minSlider: UISlider!
+    private var maxSlider: UISlider!
+    private var hintLabel: UILabel!
 
     // Cached depth data for tap-to-calibrate
     private var latestDepthData: AVDepthData?
@@ -55,7 +61,11 @@ class CameraViewController: UIViewController {
         super.viewDidLoad()
         setupDepthPreviewView()
         setupEdgePreviewView()
-        setupGestureManager()
+        if FeatureFlags.tuningMode {
+            setupDisparityControls()
+        } else {
+            setupGestureManager()
+        }
         requestCameraAccess()
 
         // Start continuous haptic feedback
@@ -99,6 +109,122 @@ class CameraViewController: UIViewController {
         gestureManager = GestureManager(parentView: view)
         gestureManager.delegate = self
         gestureManager.addTapGesture(to: edgePreviewView)
+        edgePreviewView.isUserInteractionEnabled = true
+    }
+
+    /// Sets up on-screen sliders to tweak min/max disparity in real time
+    private func setupDisparityControls() {
+        edgePreviewView.isUserInteractionEnabled = false
+        // Ensure defaults are applied at startup
+        depthProcessor.resetToDefaultRange()
+
+        // Container view
+        controlsContainer = UIView()
+        controlsContainer.translatesAutoresizingMaskIntoConstraints = false
+        controlsContainer.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        controlsContainer.layer.cornerRadius = 10
+        controlsContainer.clipsToBounds = true
+        view.addSubview(controlsContainer)
+
+        // Labels and sliders
+        minLabel = UILabel()
+        minLabel.translatesAutoresizingMaskIntoConstraints = false
+        minLabel.textColor = .white
+        minLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        maxLabel = UILabel()
+        maxLabel.translatesAutoresizingMaskIntoConstraints = false
+        maxLabel.textColor = .white
+        maxLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        minSlider = UISlider()
+        minSlider.translatesAutoresizingMaskIntoConstraints = false
+        minSlider.minimumValue = 0.0
+        minSlider.maximumValue = 5.0
+        minSlider.addTarget(self, action: #selector(onMinSliderChanged), for: .valueChanged)
+
+        maxSlider = UISlider()
+        maxSlider.translatesAutoresizingMaskIntoConstraints = false
+        maxSlider.minimumValue = 0.1
+        maxSlider.maximumValue = 8.0
+        maxSlider.addTarget(self, action: #selector(onMaxSliderChanged), for: .valueChanged)
+
+        hintLabel = UILabel()
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+        hintLabel.textColor = .systemYellow
+        hintLabel.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        hintLabel.numberOfLines = 0
+
+        // Add subviews
+        controlsContainer.addSubview(minLabel)
+        controlsContainer.addSubview(minSlider)
+        controlsContainer.addSubview(maxLabel)
+        controlsContainer.addSubview(maxSlider)
+        controlsContainer.addSubview(hintLabel)
+
+        // Set initial slider values from processor
+        minSlider.value = depthProcessor.minDisparity
+        maxSlider.value = depthProcessor.maxDisparity
+        updateDisparityLabelsAndHint()
+
+        // Layout constraints
+        NSLayoutConstraint.activate([
+            controlsContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            controlsContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            controlsContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+
+            minLabel.topAnchor.constraint(equalTo: controlsContainer.topAnchor, constant: 10),
+            minLabel.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
+            minLabel.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+
+            minSlider.topAnchor.constraint(equalTo: minLabel.bottomAnchor, constant: 6),
+            minSlider.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
+            minSlider.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+
+            maxLabel.topAnchor.constraint(equalTo: minSlider.bottomAnchor, constant: 10),
+            maxLabel.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
+            maxLabel.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+
+            maxSlider.topAnchor.constraint(equalTo: maxLabel.bottomAnchor, constant: 6),
+            maxSlider.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
+            maxSlider.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+
+            hintLabel.topAnchor.constraint(equalTo: maxSlider.bottomAnchor, constant: 8),
+            hintLabel.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
+            hintLabel.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+            hintLabel.bottomAnchor.constraint(equalTo: controlsContainer.bottomAnchor, constant: -10)
+        ])
+    }
+
+    private func updateDisparityLabelsAndHint() {
+        let minVal = minSlider.value
+        let maxVal = maxSlider.value
+        minLabel.text = String(format: "Min disparity (far): %.3f", minVal)
+        maxLabel.text = String(format: "Max disparity (near): %.3f", maxVal)
+        hintLabel.text = String(
+            format: "Use as defaults:\nDepthProcessor.defaultMinDisparity = %.3f\nDepthProcessor.defaultMaxDisparity = %.3f",
+            minVal, maxVal
+        )
+    }
+
+    @objc private func onMinSliderChanged() {
+        // Maintain invariant: min < max
+        if minSlider.value >= maxSlider.value {
+            maxSlider.value = min(minSlider.value + 0.01, maxSlider.maximumValue)
+        }
+        depthProcessor.minDisparity = minSlider.value
+        depthProcessor.maxDisparity = maxSlider.value
+        updateDisparityLabelsAndHint()
+    }
+
+    @objc private func onMaxSliderChanged() {
+        // Maintain invariant: min < max
+        if maxSlider.value <= minSlider.value {
+            minSlider.value = max(maxSlider.value - 0.01, minSlider.minimumValue)
+        }
+        depthProcessor.minDisparity = minSlider.value
+        depthProcessor.maxDisparity = maxSlider.value
+        updateDisparityLabelsAndHint()
     }
 
     // MARK: - Camera Permission

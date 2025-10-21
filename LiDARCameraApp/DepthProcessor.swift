@@ -84,11 +84,11 @@ class DepthProcessor {
 
     /// Minimum disparity value for normalization (corresponds to ~5m)
     /// Disparity is inverse of distance, so lower values = farther objects
-    var minDisparity: Float = 0.2
+    var minDisparity: Float = DepthProcessor.defaultMinDisparity
 
     /// Maximum disparity value for normalization (corresponds to ~0.5m)
     /// Higher values = closer objects
-    var maxDisparity: Float = 4.0
+    var maxDisparity: Float = DepthProcessor.defaultMaxDisparity
 
     // MARK: - Public Methods
 
@@ -128,9 +128,9 @@ class DepthProcessor {
 
     /// Resets the depth range to default values
     func resetToDefaultRange() {
-        minDisparity = defaultMinDisparity
-        maxDisparity = defaultMaxDisparity
-        print("🔄 Reset to defaults: min=\(defaultMinDisparity), max=\(defaultMaxDisparity)")
+        minDisparity = DepthProcessor.defaultMinDisparity
+        maxDisparity = DepthProcessor.defaultMaxDisparity
+        print("🔄 Reset to defaults: min=\(DepthProcessor.defaultMinDisparity), max=\(DepthProcessor.defaultMaxDisparity)")
     }
 
     /// Calculates 5th and 95th percentiles from depth buffer
