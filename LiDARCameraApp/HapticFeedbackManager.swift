@@ -163,7 +163,7 @@ class HapticFeedbackManager {
         let clampedIntensity = max(minimumIntensity, min(maximumIntensity, intensity))
 
         // DEBUG: Log intensity values
-        print("🔊 Haptic intensity: \(clampedIntensity) (from depth: \(depth))")
+        // print("🔊 Haptic intensity: \(clampedIntensity) (from depth: \(depth))")
 
         // Store for fallback generator
         currentDepth = clampedIntensity

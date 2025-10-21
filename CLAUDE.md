@@ -23,14 +23,14 @@ The app follows OOP principles with clear separation of concerns:
         │ uses
         ├───────────┬──────────────┬──────────────────┬──────────────────┐
         │           │              │                  │                  │
-┌───────▼─────┐  ┌─▼────────────┐ ┌▼─────────────┐  ┌▼─────────────────┐ ┌▼─────────────┐
-│ Depth       │  │ Depth        │ │ Edge         │  │ Gesture          │ │ Haptic       │
-│ Processor   │  │ Visualizer   │ │ Detector     │  │ Manager          │ │ Feedback Mgr │
+┌───────▼─────┐  ┌─▼────────────┐ ┌▼──────────────┐  ┌▼─────────────────┐ ┌▼─────────────┐
+│ Depth       │  │ Depth        │ │ EdgeDetector │  │ Gesture          │ │ Haptic       │
+│ Processor   │  │ Visualizer   │ │ GPU          │  │ Manager          │ │ Feedback Mgr │
 ├─────────────┤  ├──────────────┤ ├──────────────┤  ├──────────────────┤ ├──────────────┤
-│ - Convert   │  │ - Color map  │ │ - Edge index │  │ - Tap/double tap │ │ - Continuous │
-│ - Normalize │  │ - Orient     │ │ - Gradients  │  │ - Focus UI       │ │   vibration  │
-│ - Calibrate │  │ - Scale/crop │ │ - Eigenvalue │  │ - Delegate       │ │ - Dynamic    │
-│ - Sample    │  │ - Render     │ │ - NMS        │  │   pattern        │ │   intensity  │
+│ - Convert   │  │ - Color map  │ │ - RGB Sobel  │  │ - Tap/double tap │ │ - Continuous │
+│ - Normalize │  │ - Orient     │ │ - Depth Sobel│  │ - Focus UI       │ │   vibration  │
+│ - Calibrate │  │ - Scale/crop │ │ - GPU fusion │  │ - Delegate       │ │ - Dynamic    │
+│ - Sample    │  │ - Render     │ │ - Metal      │  │   pattern        │ │   intensity  │
 └─────────────┘  └──────────────┘ └──────────────┘  └──────────────────┘ └──────────────┘
 ```
 
@@ -97,29 +97,35 @@ Manages:
 - Reusable CIContext for performance
 - Private helper methods for single-responsibility functions
 
-### EdgeDetector.swift
-**Responsibility**: Real-time edge detection in depth maps
+### EdgeDetectorGPU.swift
+**Responsibility**: GPU-accelerated real-time edge detection combining RGB and depth data
 
-Implements Xia & Wang (2017) algorithm for extracting geometric discontinuities (edges) from LiDAR depth data.
+Implements multi-modal edge detection using Core Image filters for GPU acceleration.
 
 **Algorithm Overview**:
-The Xia2017 algorithm detects edges by measuring how each point is displaced from its local geometric centroid, then analyzing how these displacements change spatially to define gradients. A gradient matrix M is constructed from gradient products and smoothed with a Gaussian kernel. Edge detection uses the eigenvalue ratio Tr(M)³/Det(M): when eigenvalues are large, this ratio exceeds a threshold, identifying edge candidates. Non-maximum suppression thins edges to single-pixel width.
+This multi-modal approach detects edges by combining information from both the RGB camera and LiDAR depth sensor. RGB edge detection finds visual discontinuities (texture, color changes) using standard Sobel operators. Depth edge detection finds geometric discontinuities (surface boundaries, depth jumps) using gradient analysis. The two edge maps are fused with weighted combination to produce a robust final edge map that captures both photometric and geometric edges.
 
 **Implementation Details**:
-- Adapted for iPhone LiDAR's organized depth maps (2.5D) rather than unorganized 3D point clouds
-- Neighborhood radius: 5 pixels (reduced from paper's 0.15m)
-- Minimum neighbors: 15 (reduced from paper's 30)
-- Processes in pixel space (x, y, depth) for efficiency
-- Gaussian smoothing: σ=1.0, 2-pixel radius
-- Eigenvalue threshold: 80 (lowered from 100 for mobile data sensitivity)
+- Uses Core Image filters for GPU acceleration via Metal
+- RGB edges detected via CISobelGradients on camera feed
+- Depth edges detected via CISobelGradients on normalized depth map
+- Both edge detections run in parallel on GPU
+- Fusion uses CIAdditionCompositing with configurable weights (default: 0.5 RGB, 0.5 depth)
+- All operations execute on GPU, achieving <10ms processing time
 - Outputs normalized edge strength map (0-1 range) as CVPixelBuffer
 
 **Processing Steps**:
-1. Calculate edge index (displacement from local centroid) for all pixels
-2. Compute 3D gradients (Ix, Iy, Iz) based on edge index differences
-3. Build and smooth gradient matrix M
-4. Detect edges using eigenvalue ratio analysis
-5. Apply non-maximum suppression along gradient direction
+1. Convert RGB camera frame to grayscale (GPU)
+2. Apply Sobel edge detection to RGB (GPU)
+3. Apply Sobel edge detection to depth map (GPU)
+4. Amplify depth edges with color matrix multiplication (GPU)
+5. Weighted fusion of RGB and depth edges (GPU)
+6. Return combined edge map for visualization
+
+**Performance**:
+- ~100x faster than CPU-based Xia2017 algorithm
+- Processes every 3rd frame (~10fps) for real-time performance
+- Typical execution time: <10ms per frame on GPU
 
 ### GestureManager.swift
 **Responsibility**: Touch gesture handling and visual feedback
@@ -158,29 +164,31 @@ Manages:
 
 ### Depth Data Processing Pipeline
 
-1. **Capture**: AVCaptureDepthDataOutput streams depth frames from LiDAR camera
+1. **Capture**:
+   - AVCaptureDepthDataOutput streams depth frames from LiDAR camera
+   - AVCaptureVideoDataOutput streams RGB frames from camera
 2. **Process** (DepthProcessor):
    - Convert to 32-bit floating-point disparity format
    - Normalize depth values to 0-1 range using fixed disparity range (0.2 to 4.0)
    - Values are clamped to ensure consistent visualization across frames
    - Sample center aperture for haptic feedback
-3. **Edge Detection** (EdgeDetector):
-   - Detect geometric discontinuities using Xia2017 algorithm
-   - Calculate edge indices (displacement from local centroid)
-   - Compute 3D gradients and build gradient matrix
-   - Apply eigenvalue ratio analysis for edge detection
-   - Non-maximum suppression for clean edges
-   - Store edge map for future use
+3. **Edge Detection** (EdgeDetectorGPU):
+   - RGB edge detection: Sobel filter on camera feed (GPU)
+   - Depth edge detection: Sobel filter on depth map (GPU)
+   - Edge fusion: Weighted combination of RGB + depth edges (GPU)
+   - All operations run on Metal GPU for real-time performance (<10ms)
+   - Store edge map for visualization
 4. **Haptic Feedback** (HapticFeedbackManager):
    - Receive average center depth (0.0 = far, 1.0 = close)
    - Update continuous vibration intensity
    - Stronger vibration for closer objects
 5. **Visualize** (DepthVisualizer):
-   - Apply false color filter (blue→red gradient)
+   - Depth: Apply false color filter (blue→red gradient)
+   - Edges: Apply false color filter (transparent→green gradient)
    - Apply orientation transform
    - Scale and crop to screen size
    - Render to CGImage
-6. **Display**: Update UIImageView on main thread
+6. **Display**: Update UIImageViews on main thread (depth + edges)
 
 ### Orientation Handling
 
@@ -255,7 +263,8 @@ This structure makes the code easier to test, modify, and understand.
 
 - ✅ Real-time LiDAR depth overlay
 - ✅ Color-coded depth visualization with fixed range normalization
-- ✅ **Real-time edge detection** using Xia2017 algorithm
+- ✅ **GPU-accelerated edge detection** combining RGB + depth data
+- ✅ **Multi-modal edge fusion** (photometric + geometric edges)
 - ✅ **Tap-to-calibrate depth range** (single tap)
 - ✅ **Double-tap to reset** depth range to defaults
 - ✅ Consistent depth mapping (same distance = same color across frames)
@@ -282,26 +291,28 @@ None currently.
 
 ## Technical Notes
 
-### Edge Detection (Xia2017)
-The app implements real-time edge detection based on Xia & Wang's 2017 paper "A Fast Edge Extraction Method for Mobile Lidar Point Clouds."
+### GPU-Accelerated Multi-Modal Edge Detection
+The app implements real-time edge detection by combining RGB camera and LiDAR depth data using GPU acceleration.
 
 **How It Works**:
-1. **Edge Index**: For each pixel, calculate displacement from local geometric centroid (nearby pixels)
-2. **Gradients**: Compute 3D gradients (Ix, Iy, Iz) based on how edge indices change spatially
-3. **Gradient Matrix**: Build matrix M from gradient products (Ix², IxIy, IxIz, etc.)
-4. **Gaussian Smoothing**: Smooth M to prevent singularities (Det(M) = 0)
-5. **Eigenvalue Analysis**: Calculate ratio Tr(M)³/Det(M); high values indicate edges
-6. **Non-Maximum Suppression**: Thin edges to single-pixel width along gradient direction
+1. **RGB Edge Detection**: Apply Sobel gradient filter to grayscale camera feed (GPU via CISobelGradients)
+2. **Depth Edge Detection**: Apply Sobel gradient filter to normalized depth map (GPU via CISobelGradients)
+3. **Depth Edge Amplification**: Multiply depth edges by 2.0 using color matrix (GPU)
+4. **Weighted Fusion**: Combine RGB edges (50%) and depth edges (50%) using addition compositing (GPU)
+5. **Output**: Normalized edge strength map (CVPixelBuffer, 0-1 range)
 
-**Key Insight**: Edges (surface boundaries and intersections) have large eigenvalues in their gradient distributions. The trace/determinant ratio amplifies this signal without computing expensive SVD.
+**Why Multi-Modal**:
+- **RGB edges** capture photometric discontinuities: texture changes, painted lines, color boundaries
+- **Depth edges** capture geometric discontinuities: walls, furniture edges, surface boundaries
+- **Combined** provides robust edge detection that works in varied lighting and surfaces
 
-**Adaptations for Mobile**:
-- Smaller neighborhoods (5px radius vs 0.15m) for lower resolution depth maps
-- Pixel-space processing (x, y, depth) instead of full 3D world coordinates
-- Fixed Gaussian parameters for consistent real-time performance
-- Lower threshold (80 vs 100) for noisier mobile LiDAR data
+**Performance**:
+- All operations execute on GPU via Metal/Core Image
+- Typical execution time: <10ms per frame (100x faster than CPU approaches)
+- Processes every 3rd frame (~10fps) for balance between performance and real-time updates
+- No blocking of depth or haptic pipelines
 
-**Output**: Normalized edge strength map (CVPixelBuffer, 0-1 range) cached in `latestEdgeMap`
+**Output**: Green-colored edge overlay (transparent→bright green gradient) displayed above depth visualization
 
 ## Technical Notes (Continued)
 

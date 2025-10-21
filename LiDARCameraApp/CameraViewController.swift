@@ -19,16 +19,23 @@ class CameraViewController: UIViewController {
     private let captureSession = AVCaptureSession()
     private var photoOutput = AVCapturePhotoOutput()
     private var depthOutput = AVCaptureDepthDataOutput()
+    private var videoOutput = AVCaptureVideoDataOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer!
-    
+
     private final var APERTURE_SIZE = 0.05
 
     // Depth processing components
     private let depthProcessor = DepthProcessor()
     private let depthVisualizer = DepthVisualizer()
-    private let edgeDetector = EdgeDetector()
+    private let edgeDetectorGPU = EdgeDetectorGPU()
 
-    // Cached edge map (for future use)
+    // Edge detection performance
+    private let edgeQueue = DispatchQueue(label: "com.gabe.edgeQueue", qos: .userInitiated)
+    private var edgeFrameCounter: Int = 0
+    private let edgeFrameSkip: Int = 3  // Process every 3rd frame for GPU (faster)
+
+    // Cached frames for edge detection
+    private var latestRGBImage: CIImage?
     private var latestEdgeMap: CVPixelBuffer?
 
     // Haptic feedback
@@ -149,6 +156,7 @@ class CameraViewController: UIViewController {
             // Configure outputs
             configurePhotoOutput()
             configureDepthOutput()
+            configureVideoOutput()
 
             captureSession.commitConfiguration()
 
@@ -193,6 +201,23 @@ class CameraViewController: UIViewController {
 
         if let connection = depthOutput.connection(with: .depthData) {
             connection.isEnabled = true
+        }
+    }
+
+    private func configureVideoOutput() {
+        if captureSession.canAddOutput(videoOutput) {
+            captureSession.addOutput(videoOutput)
+
+            // Configure for RGB video frames
+            videoOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+
+            // Use same queue as depth for easier synchronization
+            let videoQueue = DispatchQueue(label: "com.gabe.videoQueue")
+            videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
+
+            print("✅ Video output added for RGB edge detection.")
         }
     }
 
@@ -256,14 +281,50 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Process depth data
         let processedDepthMap = depthProcessor.processDepthData(depthData)
 
-        // Detect edges in depth map (Xia2017 algorithm)
-        latestEdgeMap = edgeDetector.detectEdges(from: processedDepthMap)
+        // GPU-accelerated edge detection (RGB + Depth fusion)
+        edgeFrameCounter += 1
+        if edgeFrameCounter >= edgeFrameSkip {
+            edgeFrameCounter = 0
+
+            // Run GPU edge detection on separate queue
+            edgeQueue.async { [weak self] in
+                guard let self = self else { return }
+
+                let startTime = Date()
+
+                // Detect edges using GPU (combines RGB + depth)
+                let edgeMap = self.edgeDetectorGPU.detectEdges(
+                    rgbImage: self.latestRGBImage,
+                    depthMap: processedDepthMap
+                )
+
+                let elapsed = Date().timeIntervalSince(startTime)
+                print("⏱️ GPU edge detection took \(String(format: "%.1f", elapsed * 1000))ms")
+
+                // Update cached edge map
+                self.latestEdgeMap = edgeMap
+
+                // Visualize edges and update UI
+                if let edgeMap = edgeMap,
+                   let videoOrientation = self.previewLayer.connection?.videoOrientation {
+                    let viewSize = UIScreen.main.bounds.size
+
+                    if let edgeImage = self.depthVisualizer.visualizeEdges(
+                        edgeMap: edgeMap,
+                        orientation: videoOrientation,
+                        targetSize: viewSize
+                    ) {
+                        print("✅ GPU edge image created")
+                        Task { @MainActor in
+                            self.edgePreviewView.image = UIImage(cgImage: edgeImage)
+                        }
+                    }
+                }
+            }
+        }
 
         // Sample center depth for haptic feedback
         let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap, apertureSize: APERTURE_SIZE)
-
-        // DEBUG: Log depth values
-        print("📊 Center depth (normalized): \(centerDepth)")
 
         // Update haptic intensity based on proximity
         // Higher depth value = closer object = stronger vibration
@@ -280,23 +341,28 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
             targetSize: viewSize
         ) else { return }
 
-        // Visualize edge map (if available)
-        var edgeImage: CGImage?
-        if let edgeMap = latestEdgeMap {
-            edgeImage = depthVisualizer.visualizeEdges(
-                edgeMap: edgeMap,
-                orientation: videoOrientation,
-                targetSize: viewSize
-            )
-        }
-
-        // Update UI on main thread
+        // Update depth UI on main thread
         Task { @MainActor in
             self.depthPreviewView.image = UIImage(cgImage: depthImage)
-            if let edgeImage = edgeImage {
-                self.edgePreviewView.image = UIImage(cgImage: edgeImage)
-            }
         }
+    }
+}
+
+// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+
+extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
+
+    func captureOutput(_ output: AVCaptureOutput,
+                      didOutput sampleBuffer: CMSampleBuffer,
+                      from connection: AVCaptureConnection) {
+
+        // Extract CIImage from RGB video frame
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return
+        }
+
+        // Cache latest RGB frame for edge detection
+        latestRGBImage = CIImage(cvPixelBuffer: pixelBuffer)
     }
 }
 
