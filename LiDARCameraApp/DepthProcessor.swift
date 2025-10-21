@@ -74,10 +74,10 @@ class DepthProcessor {
     // MARK: - Properties
 
     /// Default minimum disparity value (corresponds to ~5m)
-    public static var defaultMinDisparity: Float = 0.05
+    public static var defaultMinDisparity: Float = 0.610
 
     /// Default maximum disparity value (corresponds to ~0.25m)
-    public static var defaultMaxDisparity: Float = 4.0
+    public static var defaultMaxDisparity: Float = 0.757
     
     /// Aperture size; the radius of the region sampled (0-1)
     public static var APERTURE_SIZE = 0.2
