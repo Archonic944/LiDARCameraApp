@@ -5,8 +5,8 @@ An iOS application that displays a real-time LiDAR depth overlay on the camera p
 ## Overview
 
 This app uses the iPhone/iPad's LiDAR sensor to capture depth data and display it as a colored overlay on top of the camera feed. Objects are color-coded based on distance:
-- **Red**: Close objects (high disparity)
-- **Blue**: Far objects (low disparity)
+- **Red**: Close objects (near)
+- **Blue**: Far objects
 
 ## Architecture
 
@@ -56,8 +56,8 @@ The main view controller that:
 **Responsibility**: Depth data processing, normalization, and calibration
 
 Handles:
-- Converting AVDepthData to 32-bit float disparity format
-- Normalizing depth values to 0-1 range using fixed disparity range
+- Converting AVDepthData to 32-bit float depth format (meters)
+- Normalizing depth values to 0-1 range using fixed depth range
 - CVPixelBuffer manipulation
 - Center aperture sampling for haptic feedback
 - **Tap-to-calibrate range adjustment**
@@ -65,7 +65,7 @@ Handles:
 **Key Features**:
 - Extension on CVPixelBuffer for reusable normalization
 - Fixed range normalization for consistent depth visualization
-- Configurable min/max disparity values (default: 0.2 to 4.0)
+- Configurable min/max depth values in meters (default: 0.25m to 5.0m)
 - Thread-safe operations
 - `calibrateRange()` method for dynamic range adjustment
 
@@ -74,13 +74,14 @@ Handles:
 - Ensures consistent color mapping across frames
 - Objects at the same distance always show the same color
 - Values outside range are clamped to 0-1
-- Default range: minDisparity=0.2 (~5m), maxDisparity=4.0 (~0.25m)
+- Default range: minDepth=0.25m (near), maxDepth=5.0m (far)
+- Inverts depth values so 0 = far (blue), 1 = near (red) for consistent visualization
 
 **Calibration Method**:
 - `calibrateToCurrentFrame(from:)` analyzes entire depth frame
 - `calculatePercentiles(from:)` helper extracts valid values, sorts, and computes P5/P95
 - Sets new min/max range based on scene statistics
-- Ensures minimum range of 0.1 to avoid division by zero
+- Ensures minimum range of 0.1 meters to avoid division by zero
 
 ### DepthVisualizer.swift
 **Responsibility**: Rendering depth data as visual overlays
@@ -168,8 +169,9 @@ Manages:
    - AVCaptureDepthDataOutput streams depth frames from LiDAR camera
    - AVCaptureVideoDataOutput streams RGB frames from camera
 2. **Process** (DepthProcessor):
-   - Convert to 32-bit floating-point disparity format
-   - Normalize depth values to 0-1 range using fixed disparity range (0.2 to 4.0)
+   - Convert to 32-bit floating-point depth format (meters)
+   - Normalize depth values to 0-1 range using fixed depth range (0.25m to 5.0m)
+   - Invert depth so 0 = far (blue), 1 = near (red) for consistent visualization
    - Values are clamped to ensure consistent visualization across frames
    - Sample center aperture for haptic feedback
 3. **Edge Detection** (EdgeDetectorGPU):
@@ -275,7 +277,7 @@ This structure makes the code easier to test, modify, and understand.
 - ✅ Photo capture with embedded depth data
 - ✅ Transparent overlay (80% opacity) to see camera feed
 - ✅ Configurable color schemes (via DepthVisualizer properties)
-- ✅ Configurable depth range (via DepthProcessor min/maxDisparity properties)
+- ✅ Configurable depth range (via DepthProcessor minDepth/maxDepth properties in meters)
 - ✅ Automatic haptic engine recovery from interruptions
 - ✅ Visual focus indicator with smooth animations
 
@@ -323,7 +325,7 @@ The app supports scene-adaptive depth range calibration using statistical analys
 1. Tap anywhere on the screen (location is irrelevant - just a trigger)
 2. App analyzes the **entire depth frame** statistically
 3. Calculates 5th percentile (P5) and 95th percentile (P95) of all valid depth values
-4. Sets `minDisparity = P5` and `maxDisparity = P95`
+4. Sets `minDepth = P5` and `maxDepth = P95` (in meters)
 5. Shows a yellow focus indicator animation for visual feedback
 
 **Statistical Approach**:
@@ -366,9 +368,8 @@ This workaround is necessary because setting a longer duration (e.g., 3600s) wil
 - Recording video with depth overlay
 - 3D point cloud visualization
 - Depth map export (as image or data file)
-- Display actual distance values on screen (convert disparity to meters)
+- Display actual distance values on screen (depth is already in meters)
 - Customizable percentile thresholds (currently P5/P95)
-- Double-tap to reset to default range
 - Histogram visualization of depth distribution
 
 ### Code Quality

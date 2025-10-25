@@ -112,7 +112,7 @@ class CameraViewController: UIViewController {
         edgePreviewView.isUserInteractionEnabled = true
     }
 
-    /// Sets up on-screen sliders to tweak min/max disparity in real time
+    /// Sets up on-screen sliders to tweak min/max depth in real time
     private func setupDisparityControls() {
         edgePreviewView.isUserInteractionEnabled = false
         // Ensure defaults are applied at startup
@@ -139,14 +139,14 @@ class CameraViewController: UIViewController {
 
         minSlider = UISlider()
         minSlider.translatesAutoresizingMaskIntoConstraints = false
-        minSlider.minimumValue = 0.0
-        minSlider.maximumValue = 5.0
+        minSlider.minimumValue = 0.01
+        minSlider.maximumValue = 3.0
         minSlider.addTarget(self, action: #selector(onMinSliderChanged), for: .valueChanged)
 
         maxSlider = UISlider()
         maxSlider.translatesAutoresizingMaskIntoConstraints = false
-        maxSlider.minimumValue = 0.1
-        maxSlider.maximumValue = 8.0
+        maxSlider.minimumValue = 0.5
+        maxSlider.maximumValue = 10.0
         maxSlider.addTarget(self, action: #selector(onMaxSliderChanged), for: .valueChanged)
 
         hintLabel = UILabel()
@@ -163,8 +163,8 @@ class CameraViewController: UIViewController {
         controlsContainer.addSubview(hintLabel)
 
         // Set initial slider values from processor
-        minSlider.value = depthProcessor.minDisparity
-        maxSlider.value = depthProcessor.maxDisparity
+        minSlider.value = depthProcessor.minDepth
+        maxSlider.value = depthProcessor.maxDepth
         updateDisparityLabelsAndHint()
 
         // Layout constraints
@@ -199,10 +199,10 @@ class CameraViewController: UIViewController {
     private func updateDisparityLabelsAndHint() {
         let minVal = minSlider.value
         let maxVal = maxSlider.value
-        minLabel.text = String(format: "Min disparity (far): %.3f", minVal)
-        maxLabel.text = String(format: "Max disparity (near): %.3f", maxVal)
+        minLabel.text = String(format: "Min depth (near): %.2fm", minVal)
+        maxLabel.text = String(format: "Max depth (far): %.2fm", maxVal)
         hintLabel.text = String(
-            format: "Use as defaults:\nDepthProcessor.defaultMinDisparity = %.3f\nDepthProcessor.defaultMaxDisparity = %.3f",
+            format: "Use as defaults:\nDepthProcessor.defaultMinDepth = %.2f\nDepthProcessor.defaultMaxDepth = %.2f",
             minVal, maxVal
         )
     }
@@ -210,20 +210,20 @@ class CameraViewController: UIViewController {
     @objc private func onMinSliderChanged() {
         // Maintain invariant: min < max
         if minSlider.value >= maxSlider.value {
-            maxSlider.value = min(minSlider.value + 0.01, maxSlider.maximumValue)
+            maxSlider.value = min(minSlider.value + 0.1, maxSlider.maximumValue)
         }
-        depthProcessor.minDisparity = minSlider.value
-        depthProcessor.maxDisparity = maxSlider.value
+        depthProcessor.minDepth = minSlider.value
+        depthProcessor.maxDepth = maxSlider.value
         updateDisparityLabelsAndHint()
     }
 
     @objc private func onMaxSliderChanged() {
         // Maintain invariant: min < max
         if maxSlider.value <= minSlider.value {
-            minSlider.value = max(maxSlider.value - 0.01, minSlider.minimumValue)
+            minSlider.value = max(maxSlider.value - 0.1, minSlider.minimumValue)
         }
-        depthProcessor.minDisparity = minSlider.value
-        depthProcessor.maxDisparity = maxSlider.value
+        depthProcessor.minDepth = minSlider.value
+        depthProcessor.maxDepth = maxSlider.value
         updateDisparityLabelsAndHint()
     }
 
@@ -524,7 +524,7 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
     private func logDepthInfo(_ depthData: AVDepthData) {
         print("✅ Depth data captured!")
 
-        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         let depthMap = convertedDepth.depthDataMap
 
         let width = CVPixelBufferGetWidth(depthMap)
@@ -537,7 +537,7 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
         if let baseAddress = CVPixelBufferGetBaseAddress(depthMap) {
             let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
             let centerValue = floatBuffer[Int(width * height / 2)]
-            print("Center depth: \(centerValue) (disparity units)")
+            print("Center depth: \(centerValue) meters")
         }
     }
 }
