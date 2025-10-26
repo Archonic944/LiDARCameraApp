@@ -38,10 +38,10 @@ The app follows OOP principles with clear separation of concerns:
 │ Depth       │  │ Depth        │ │ EdgeDetector │  │ Gesture          │ │ Haptic       │
 │ Processor   │  │ Visualizer   │ │ GPU          │  │ Manager          │ │ Feedback Mgr │
 ├─────────────┤  ├──────────────┤ ├──────────────┤  ├──────────────────┤ ├──────────────┤
-│ - Convert   │  │ - Color map  │ │ - RGB Sobel  │  │ - Tap/double tap │ │ - Continuous │
-│ - Normalize │  │ - Orient     │ │ - Depth Sobel│  │ - Focus UI       │ │   vibration  │
-│ - Calibrate │  │ - Scale/crop │ │ - GPU fusion │  │ - Delegate       │ │ - Dynamic    │
-│ - Sample    │  │ - Render     │ │ - Metal      │  │   pattern        │ │   intensity  │
+│ - Convert   │  │ - Color map  │ │ - Depth Sobel│  │ - Tap/double tap │ │ - Continuous │
+│ - Normalize │  │ - Orient     │ │ - Amplify    │  │ - Focus UI       │ │   vibration  │
+│ - Calibrate │  │ - Scale/crop │ │ - Threshold  │  │ - Delegate       │ │ - Dynamic    │
+│ - Sample    │  │ - Render     │ │ - GPU/Metal  │  │   pattern        │ │   intensity  │
 └─────────────┘  └──────────────┘ └──────────────┘  └──────────────────┘ └──────────────┘
 ```
 
@@ -119,32 +119,44 @@ Manages:
 - Private helper methods for single-responsibility functions
 
 ### EdgeDetectorGPU.swift
-**Responsibility**: GPU-accelerated real-time edge detection combining RGB and depth data
+**Responsibility**: GPU-accelerated real-time edge detection using LiDAR depth data only
 
-Implements multi-modal edge detection using Core Image filters for GPU acceleration.
+Implements depth-only edge detection using Core Image filters for GPU acceleration.
 
 **Algorithm Overview**:
-This multi-modal approach detects edges by combining information from both the RGB camera and LiDAR depth sensor. RGB edge detection finds visual discontinuities (texture, color changes) using standard Sobel operators. Depth edge detection finds geometric discontinuities (surface boundaries, depth jumps) using gradient analysis. The two edge maps are fused with weighted combination to produce a robust final edge map that captures both photometric and geometric edges.
+This depth-only approach detects edges by analyzing geometric discontinuities in the LiDAR depth map. Depth edge detection finds surface boundaries and depth jumps using Sobel gradient analysis. The edge strength can be amplified and thresholded using customizable parameters.
 
 **Implementation Details**:
 - Uses Core Image filters for GPU acceleration via Metal
-- RGB edges detected via CISobelGradients on camera feed
-- Depth edges detected via CISobelGradients on normalized depth map
-- Both edge detections run in parallel on GPU
-- Fusion uses CIAdditionCompositing with configurable weights (default: 0.5 RGB, 0.5 depth)
+- Depth edges detected via CISobelGradients on **raw meter depth map**
+- Edge amplification uses CIColorMatrix for intensity scaling
+- Optional thresholding filters out weak edges using CIColorClamp
+- Optional pre-smoothing reduces noise using CIGaussianBlur
 - All operations execute on GPU, achieving <10ms processing time
 - Outputs normalized edge strength map (0-1 range) as CVPixelBuffer
 
+**Customizable Parameters** (all public properties):
+- `edgeAmplification` (CGFloat, default: 2.0): Multiplier for edge strength (range: 1.0-5.0)
+- `edgeThreshold` (CGFloat, default: 0.1): Minimum edge strength to display (range: 0.0-1.0)
+- `enableThresholding` (Bool, default: true): Enable/disable edge thresholding
+- `preSmoothingRadius` (CGFloat, default: 0.0): Gaussian blur radius before edge detection (0.0 = disabled)
+
+**Preset Methods** (for quick calibration):
+- `resetToDefaults()`: Reset all parameters to default values
+- `applySubtlePreset()`: Subtle, high-quality edges (good for detailed scenes)
+- `applyStrongPreset()`: Strong, visible edges (good for bold visualization)
+- `applyMaximumPreset()`: Maximum edge detection (shows all edges, including noise)
+- `applyCleanPreset()`: Clean edges (reduces noise, shows only strong edges)
+
 **Processing Steps**:
-1. Convert RGB camera frame to grayscale (GPU)
-2. Apply Sobel edge detection to RGB (GPU)
-3. Apply Sobel edge detection to depth map (GPU)
-4. Amplify depth edges with color matrix multiplication (GPU)
-5. Weighted fusion of RGB and depth edges (GPU)
-6. Return combined edge map for visualization
+1. Optional pre-smoothing with Gaussian blur (GPU)
+2. Apply Sobel edge detection to depth map (GPU)
+3. Amplify edges with configurable color matrix multiplication (GPU)
+4. Optional threshold to filter weak edges (GPU)
+5. Return edge map for visualization
 
 **Performance**:
-- ~100x faster than CPU-based Xia2017 algorithm
+- ~100x faster than CPU-based approaches
 - Processes every 3rd frame (~10fps) for real-time performance
 - Typical execution time: <10ms per frame on GPU
 
@@ -193,9 +205,10 @@ Manages:
    - **Preserve raw meter values** - no in-place mutation
    - Sample center aperture for haptic feedback (returns meters)
 3. **Edge Detection** (EdgeDetectorGPU):
-   - RGB edge detection: Sobel filter on camera feed (GPU)
-   - Depth edge detection: Sobel filter on **raw meter values** (GPU)
-   - Edge fusion: Weighted combination of RGB + depth edges (GPU)
+   - Depth-only edge detection: Sobel filter on **raw meter values** (GPU)
+   - Optional pre-smoothing to reduce noise (GPU)
+   - Edge amplification with customizable factor (GPU)
+   - Optional thresholding to filter weak edges (GPU)
    - All operations run on Metal GPU for real-time performance (<10ms)
    - Store edge map for visualization
 4. **Haptic Feedback** (HapticFeedbackManager):
@@ -289,8 +302,8 @@ This structure makes the code easier to test, modify, and understand.
 
 - ✅ Real-time LiDAR depth overlay
 - ✅ Color-coded depth visualization with fixed range normalization
-- ✅ **GPU-accelerated edge detection** combining RGB + depth data
-- ✅ **Multi-modal edge fusion** (photometric + geometric edges)
+- ✅ **GPU-accelerated depth-only edge detection** with customizable parameters
+- ✅ **Calibratable edge detection** (amplification, thresholding, smoothing)
 - ✅ **Tap-to-calibrate depth range** (single tap)
 - ✅ **Double-tap to reset** depth range to defaults
 - ✅ Consistent depth mapping (same distance = same color across frames)
@@ -318,22 +331,36 @@ None currently.
 
 ## Technical Notes
 
-### GPU-Accelerated Multi-Modal Edge Detection
-The app implements real-time edge detection by combining RGB camera and LiDAR depth data using GPU acceleration.
+### GPU-Accelerated Depth-Only Edge Detection
+The app implements real-time edge detection using LiDAR depth data only with customizable, calibratable parameters.
 
 **How It Works**:
-1. **RGB Edge Detection**: Apply Sobel gradient filter to grayscale camera feed (GPU via CISobelGradients)
+1. **Optional Pre-Smoothing**: Apply Gaussian blur to reduce noise (GPU via CIGaussianBlur, configurable radius)
 2. **Depth Edge Detection**: Apply Sobel gradient filter to **raw meter depth map** (GPU via CISobelGradients)
-3. **Depth Edge Amplification**: Multiply depth edges by 2.0 using color matrix (GPU)
-4. **Weighted Fusion**: Combine RGB edges (50%) and depth edges (50%) using addition compositing (GPU)
+3. **Edge Amplification**: Multiply edge strength by configurable factor (GPU via CIColorMatrix, default: 2.0)
+4. **Optional Thresholding**: Filter out weak edges below configurable threshold (GPU via CIColorClamp, default: 0.1)
 5. **Output**: Normalized edge strength map (CVPixelBuffer, 0-1 range)
 
 **Note**: Edge detection operates directly on raw meter values from LiDAR, detecting geometric discontinuities in real-world distance measurements.
 
-**Why Multi-Modal**:
-- **RGB edges** capture photometric discontinuities: texture changes, painted lines, color boundaries
-- **Depth edges** capture geometric discontinuities: walls, furniture edges, surface boundaries
-- **Combined** provides robust edge detection that works in varied lighting and surfaces
+**Why Depth-Only**:
+- **Depth edges** capture geometric discontinuities: walls, furniture edges, surface boundaries, depth jumps
+- **Lighting-independent**: Works in complete darkness (LiDAR doesn't need light)
+- **Fully customizable**: All parameters exposed for tuning to specific use cases
+- **Calibratable**: Preset methods for quick adjustments (subtle, strong, maximum, clean)
+
+**Customization Parameters**:
+- `edgeAmplification`: Control edge visibility (1.0-5.0, default: 2.0)
+- `edgeThreshold`: Filter weak edges (0.0-1.0, default: 0.1)
+- `enableThresholding`: Toggle edge filtering (default: true)
+- `preSmoothingRadius`: Noise reduction blur (default: 0.0 = disabled)
+
+**Preset Methods for Quick Calibration**:
+- `applySubtlePreset()`: Detailed, high-quality edges with smoothing
+- `applyStrongPreset()`: Bold, visible edges for clear visualization
+- `applyMaximumPreset()`: All edges including noise (no filtering)
+- `applyCleanPreset()`: Strong smoothing, high threshold for clean output
+- `resetToDefaults()`: Return to default parameters
 
 **Performance**:
 - All operations execute on GPU via Metal/Core Image

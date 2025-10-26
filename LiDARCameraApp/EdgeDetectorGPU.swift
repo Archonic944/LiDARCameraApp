@@ -2,42 +2,60 @@
 //  EdgeDetectorGPU.swift
 //  LiDARCameraApp
 //
-//  GPU-accelerated edge detection combining RGB camera and LiDAR depth data
+//  GPU-accelerated edge detection using LiDAR depth data only
 //
 //  ALGORITHM OVERVIEW:
-//  This multi-modal approach detects edges by combining information from both the RGB camera
-//  and LiDAR depth sensor. RGB edge detection finds visual discontinuities (texture, color changes)
-//  using standard Sobel operators. Depth edge detection finds geometric discontinuities (surface
-//  boundaries, depth jumps) using gradient analysis. The two edge maps are fused with weighted
-//  combination to produce a robust final edge map that captures both photometric and geometric edges.
+//  This depth-only approach detects edges by analyzing geometric discontinuities in the LiDAR depth map.
+//  Depth edge detection finds surface boundaries and depth jumps using Sobel gradient analysis.
+//  The edge strength can be amplified and thresholded using customizable parameters.
 //
 //  IMPLEMENTATION DETAILS:
-//  Uses Core Image filters for GPU acceleration. RGB edges detected via CISobelGradients on camera
-//  feed. Depth edges detected via CISobelGradients on normalized depth map. Both run in parallel
-//  on GPU. Fusion uses CIAdditionCompositing with configurable weights (default: 0.5 RGB, 0.5 depth).
-//  All operations execute on GPU via Metal, achieving <10ms processing time for real-time performance.
-//  Output is normalized edge strength map (0-1 range) suitable for visualization or further processing.
+//  Uses Core Image filters for GPU acceleration. Depth edges detected via CISobelGradients on the
+//  depth map (raw meter values). Edge amplification uses CIColorMatrix for intensity scaling.
+//  Optional thresholding filters out weak edges. All operations execute on GPU via Metal,
+//  achieving <10ms processing time for real-time performance. Output is normalized edge strength
+//  map (0-1 range) suitable for visualization or further processing.
+//
+//  CUSTOMIZABLE PARAMETERS:
+//  - edgeAmplification: Multiplier for edge strength (default: 2.0)
+//  - edgeThreshold: Minimum edge strength to display (default: 0.1)
+//  - enableThresholding: Whether to apply threshold filter (default: true)
 //
 
 import Foundation
 import CoreImage
 import CoreVideo
 
-/// GPU-accelerated edge detector combining RGB and depth information
+/// GPU-accelerated edge detector using depth data only
 class EdgeDetectorGPU {
 
     // MARK: - Properties
 
     private let ciContext: CIContext
 
-    /// Weight for RGB edges in fusion (0.0 to 1.0)
-    var rgbWeight: Float = 0.5
+    // MARK: - Customizable Edge Detection Parameters
 
-    /// Weight for depth edges in fusion (0.0 to 1.0)
-    var depthWeight: Float = 0.5
+    /// Multiplier for edge strength amplification (higher = more visible edges)
+    /// Typical range: 1.0 - 5.0
+    /// Default: 2.0
+    var edgeAmplification: CGFloat = 2.0
 
-    /// Edge detection intensity/threshold
-    var edgeIntensity: Float = 1.0
+    /// Minimum edge strength threshold (0.0 - 1.0)
+    /// Edges below this value are filtered out
+    /// Lower values = more edges visible, higher values = only strong edges
+    /// Default: 0.1
+    var edgeThreshold: CGFloat = 0.6
+
+    /// Enable/disable edge thresholding
+    /// When false, all edges are shown regardless of strength
+    /// Default: true
+    var enableThresholding: Bool = true
+
+    /// Smoothing factor applied before edge detection (reduces noise)
+    /// Higher values = smoother edges, but may lose detail
+    /// Set to 0.0 to disable smoothing
+    /// Default: 0.0 (disabled)
+    var preSmoothingRadius: CGFloat = 0.2
 
     // MARK: - Initialization
 
@@ -52,66 +70,34 @@ class EdgeDetectorGPU {
 
     // MARK: - Edge Detection
 
-    /// Detects edges using both RGB and depth data
+    /// Detects edges using depth data only
     /// - Parameters:
-    ///   - rgbImage: RGB camera frame as CIImage
-    ///   - depthMap: Normalized depth map as CVPixelBuffer
-    /// - Returns: Combined edge map as CVPixelBuffer, or nil if detection fails
+    ///   - rgbImage: RGB camera frame (IGNORED - kept for API compatibility)
+    ///   - depthMap: Depth map as CVPixelBuffer (raw meter values)
+    /// - Returns: Depth edge map as CVPixelBuffer, or nil if detection fails
     func detectEdges(rgbImage: CIImage?, depthMap: CVPixelBuffer) -> CVPixelBuffer? {
-        // Detect depth edges (always available)
-        guard let depthEdges = detectDepthEdges(from: depthMap) else {
-            return nil
-        }
-
-        // If no RGB image, return depth edges only
-        guard let rgb = rgbImage else {
-            return depthEdges
-        }
-
-        // Detect RGB edges
-        guard let rgbEdges = detectRGBEdges(from: rgb) else {
-            return depthEdges
-        }
-
-        // Fuse both edge maps
-        return fuseEdgeMaps(rgbEdges: rgbEdges, depthEdges: depthEdges)
-    }
-
-    // MARK: - RGB Edge Detection
-
-    /// Detects edges in RGB image using Sobel operator
-    private func detectRGBEdges(from image: CIImage) -> CVPixelBuffer? {
-        // Convert to grayscale for edge detection
-        var gray = image
-        if let grayFilter = CIFilter(name: "CIPhotoEffectNoir") {
-            grayFilter.setValue(image, forKey: kCIInputImageKey)
-            if let output = grayFilter.outputImage {
-                gray = output
-            }
-        }
-
-        // Apply Sobel edge detection (GPU-accelerated)
-        guard let sobelFilter = CIFilter(name: "CISobelGradients") else {
-            print("❌ CISobelGradients filter not available")
-            return nil
-        }
-
-        sobelFilter.setValue(gray, forKey: kCIInputImageKey)
-
-        guard let edgeImage = sobelFilter.outputImage else {
-            return nil
-        }
-
-        // Normalize and convert to pixel buffer
-        return createPixelBuffer(from: edgeImage)
+        return detectDepthEdges(from: depthMap)
     }
 
     // MARK: - Depth Edge Detection
 
-    /// Detects edges in depth map using gradient analysis
+    /// Detects edges in depth map using gradient analysis with customizable parameters
+    /// - Parameter depthMap: Depth map as CVPixelBuffer (raw meter values)
+    /// - Returns: Edge map as CVPixelBuffer, or nil if detection fails
     private func detectDepthEdges(from depthMap: CVPixelBuffer) -> CVPixelBuffer? {
         // Convert depth map to CIImage
         var ciDepth = CIImage(cvPixelBuffer: depthMap)
+
+        // Optional pre-smoothing to reduce noise
+        if preSmoothingRadius > 0.0 {
+            if let blurFilter = CIFilter(name: "CIGaussianBlur") {
+                blurFilter.setValue(ciDepth, forKey: kCIInputImageKey)
+                blurFilter.setValue(preSmoothingRadius, forKey: kCIInputRadiusKey)
+                if let output = blurFilter.outputImage {
+                    ciDepth = output
+                }
+            }
+        }
 
         // Apply Sobel gradient to depth (finds depth discontinuities)
         guard let sobelFilter = CIFilter(name: "CISobelGradients") else {
@@ -125,10 +111,10 @@ class EdgeDetectorGPU {
             return nil
         }
 
-        // Amplify depth edges (they tend to be subtle)
+        // Amplify depth edges using customizable amplification factor
         if let multiplyFilter = CIFilter(name: "CIColorMatrix") {
             multiplyFilter.setValue(edgeImage, forKey: kCIInputImageKey)
-            let scale: CGFloat = 2.0  // Amplify depth edges
+            let scale = edgeAmplification
             multiplyFilter.setValue(CIVector(x: scale, y: 0, z: 0, w: 0), forKey: "inputRVector")
             multiplyFilter.setValue(CIVector(x: 0, y: scale, z: 0, w: 0), forKey: "inputGVector")
             multiplyFilter.setValue(CIVector(x: 0, y: 0, z: scale, w: 0), forKey: "inputBVector")
@@ -139,60 +125,40 @@ class EdgeDetectorGPU {
             }
         }
 
+        // Optional thresholding to filter weak edges
+        if enableThresholding && edgeThreshold > 0.0 {
+            // Step 1: Subtract threshold using color matrix
+            if let subtractFilter = CIFilter(name: "CIColorMatrix") {
+                subtractFilter.setValue(edgeImage, forKey: kCIInputImageKey)
+                // Keep RGB channels as-is (multiplied by 1)
+                subtractFilter.setValue(CIVector(x: 1, y: 0, z: 0, w: 0), forKey: "inputRVector")
+                subtractFilter.setValue(CIVector(x: 0, y: 1, z: 0, w: 0), forKey: "inputGVector")
+                subtractFilter.setValue(CIVector(x: 0, y: 0, z: 1, w: 0), forKey: "inputBVector")
+                subtractFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+                // Subtract threshold from all channels via bias vector
+                subtractFilter.setValue(CIVector(x: -edgeThreshold, y: -edgeThreshold, z: -edgeThreshold, w: 0), forKey: "inputBiasVector")
+
+                if let subtracted = subtractFilter.outputImage {
+                    edgeImage = subtracted
+                }
+            }
+
+            // Step 2: Clamp negatives to 0 (removes values that were below threshold)
+            if let clampFilter = CIFilter(name: "CIColorClamp") {
+                clampFilter.setValue(edgeImage, forKey: kCIInputImageKey)
+                // Clamp minimum to 0 (removes negative values from subtraction)
+                clampFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 0), forKey: "inputMinComponents")
+                // Keep maximum at 1.0
+                clampFilter.setValue(CIVector(x: 1, y: 1, z: 1, w: 1), forKey: "inputMaxComponents")
+
+                if let output = clampFilter.outputImage {
+                    edgeImage = output
+                }
+            }
+        }
+
         // Convert to pixel buffer
         return createPixelBuffer(from: edgeImage)
-    }
-
-    // MARK: - Edge Fusion
-
-    /// Fuses RGB and depth edge maps using weighted combination
-    private func fuseEdgeMaps(rgbEdges: CVPixelBuffer, depthEdges: CVPixelBuffer) -> CVPixelBuffer? {
-        let rgbImage = CIImage(cvPixelBuffer: rgbEdges)
-        let depthImage = CIImage(cvPixelBuffer: depthEdges)
-
-        // Weighted addition of both edge maps
-        guard let blendFilter = CIFilter(name: "CIAdditionCompositing") else {
-            print("❌ CIAdditionCompositing filter not available")
-            return depthEdges  // Fallback to depth only
-        }
-
-        // Scale RGB edges by weight
-        var scaledRGB = rgbImage
-        if let scaleFilter = CIFilter(name: "CIColorMatrix") {
-            scaleFilter.setValue(rgbImage, forKey: kCIInputImageKey)
-            let scale = CGFloat(rgbWeight)
-            scaleFilter.setValue(CIVector(x: scale, y: 0, z: 0, w: 0), forKey: "inputRVector")
-            scaleFilter.setValue(CIVector(x: 0, y: scale, z: 0, w: 0), forKey: "inputGVector")
-            scaleFilter.setValue(CIVector(x: 0, y: 0, z: scale, w: 0), forKey: "inputBVector")
-            scaleFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
-            if let output = scaleFilter.outputImage {
-                scaledRGB = output
-            }
-        }
-
-        // Scale depth edges by weight
-        var scaledDepth = depthImage
-        if let scaleFilter = CIFilter(name: "CIColorMatrix") {
-            scaleFilter.setValue(depthImage, forKey: kCIInputImageKey)
-            let scale = CGFloat(depthWeight)
-            scaleFilter.setValue(CIVector(x: scale, y: 0, z: 0, w: 0), forKey: "inputRVector")
-            scaleFilter.setValue(CIVector(x: 0, y: scale, z: 0, w: 0), forKey: "inputGVector")
-            scaleFilter.setValue(CIVector(x: 0, y: 0, z: scale, w: 0), forKey: "inputBVector")
-            scaleFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
-            if let output = scaleFilter.outputImage {
-                scaledDepth = output
-            }
-        }
-
-        // Composite the weighted edges
-        blendFilter.setValue(scaledRGB, forKey: kCIInputImageKey)
-        blendFilter.setValue(scaledDepth, forKey: kCIInputBackgroundImageKey)
-
-        guard let fusedImage = blendFilter.outputImage else {
-            return depthEdges  // Fallback
-        }
-
-        return createPixelBuffer(from: fusedImage)
     }
 
     // MARK: - Helper Methods
