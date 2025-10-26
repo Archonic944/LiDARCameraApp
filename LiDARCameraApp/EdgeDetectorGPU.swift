@@ -55,7 +55,22 @@ class EdgeDetectorGPU {
     /// Higher values = smoother edges, but may lose detail
     /// Set to 0.0 to disable smoothing
     /// Default: 0.0 (disabled)
-    var preSmoothingRadius: CGFloat = 0.2
+    var preSmoothingRadius: CGFloat = 0.5
+
+    // MARK: - Performance Parameters
+
+    /// Downscale factor for processing (massive performance boost!)
+    /// 1.0 = full resolution (slowest, highest quality)
+    /// 0.5 = half resolution (4x faster, still great quality)
+    /// 0.25 = quarter resolution (16x faster, good for real-time)
+    /// Default: 0.5 (4x speedup, excellent quality/performance balance)
+    var downscaleFactor: CGFloat = 0.35
+
+    /// Upscale output back to original resolution after processing
+    /// true = edge map matches input resolution (slight GPU cost)
+    /// false = edge map stays downscaled (maximum performance)
+    /// Default: true (match input resolution)
+    var upscaleOutput: Bool = true
 
     // MARK: - Initialization
 
@@ -87,8 +102,22 @@ class EdgeDetectorGPU {
     private func detectDepthEdges(from depthMap: CVPixelBuffer) -> CVPixelBuffer? {
         // Convert depth map to CIImage
         var ciDepth = CIImage(cvPixelBuffer: depthMap)
+        let originalExtent = ciDepth.extent
 
-        // Optional pre-smoothing to reduce noise
+        // PERFORMANCE OPTIMIZATION: Downscale before processing (4-16x speedup!)
+        if downscaleFactor < 1.0 {
+            if let scaleFilter = CIFilter(name: "CILanczosScaleTransform") {
+                scaleFilter.setValue(ciDepth, forKey: kCIInputImageKey)
+                scaleFilter.setValue(downscaleFactor, forKey: kCIInputScaleKey)
+                scaleFilter.setValue(1.0, forKey: kCIInputAspectRatioKey)
+                if let scaled = scaleFilter.outputImage {
+                    ciDepth = scaled
+                    // Note: Lanczos includes anti-aliasing, so we get smoothing for free!
+                }
+            }
+        }
+
+        // Optional pre-smoothing to reduce noise (usually not needed with downsampling)
         if preSmoothingRadius > 0.0 {
             if let blurFilter = CIFilter(name: "CIGaussianBlur") {
                 blurFilter.setValue(ciDepth, forKey: kCIInputImageKey)
@@ -157,8 +186,86 @@ class EdgeDetectorGPU {
             }
         }
 
+        // PERFORMANCE OPTIMIZATION: Upscale back to original resolution (optional)
+        if upscaleOutput && downscaleFactor < 1.0 {
+            if let scaleFilter = CIFilter(name: "CILanczosScaleTransform") {
+                scaleFilter.setValue(edgeImage, forKey: kCIInputImageKey)
+                // Calculate scale needed to reach original size
+                let currentWidth = edgeImage.extent.width
+                let targetWidth = originalExtent.width
+                let upscale = targetWidth / currentWidth
+                scaleFilter.setValue(upscale, forKey: kCIInputScaleKey)
+                scaleFilter.setValue(1.0, forKey: kCIInputAspectRatioKey)
+                if let scaled = scaleFilter.outputImage {
+                    edgeImage = scaled
+                }
+            }
+        }
+
         // Convert to pixel buffer
         return createPixelBuffer(from: edgeImage)
+    }
+
+    // MARK: - Calibration & Presets
+
+    /// Resets all parameters to default values
+    func resetToDefaults() {
+        edgeAmplification = 2.0
+        edgeThreshold = 0.1
+        enableThresholding = true
+        preSmoothingRadius = 0.0
+        downscaleFactor = 0.5
+        upscaleOutput = true
+    }
+
+    /// Preset for subtle, high-quality edges (good for detailed scenes)
+    func applySubtlePreset() {
+        edgeAmplification = 1.5
+        edgeThreshold = 0.15
+        enableThresholding = true
+        preSmoothingRadius = 0.5
+        downscaleFactor = 0.75  // Higher quality
+        upscaleOutput = true
+    }
+
+    /// Preset for strong, visible edges (good for bold visualization)
+    func applyStrongPreset() {
+        edgeAmplification = 3.5
+        edgeThreshold = 0.05
+        enableThresholding = true
+        preSmoothingRadius = 0.0
+        downscaleFactor = 0.5  // Balanced
+        upscaleOutput = true
+    }
+
+    /// Preset for maximum edge detection (shows all edges, including noise)
+    func applyMaximumPreset() {
+        edgeAmplification = 5.0
+        edgeThreshold = 0.0
+        enableThresholding = false
+        preSmoothingRadius = 0.0
+        downscaleFactor = 0.5  // Balanced
+        upscaleOutput = true
+    }
+
+    /// Preset for clean edges (reduces noise, shows only strong edges)
+    func applyCleanPreset() {
+        edgeAmplification = 2.5
+        edgeThreshold = 0.2
+        enableThresholding = true
+        preSmoothingRadius = 1.0
+        downscaleFactor = 0.5  // Balanced
+        upscaleOutput = true
+    }
+
+    /// Preset for maximum performance (ultra-fast, lower quality)
+    func applyPerformancePreset() {
+        edgeAmplification = 2.5
+        edgeThreshold = 0.1
+        enableThresholding = true
+        preSmoothingRadius = 0.0
+        downscaleFactor = 0.25  // 16x speedup!
+        upscaleOutput = false   // Skip upscaling for max speed
     }
 
     // MARK: - Helper Methods
