@@ -150,7 +150,7 @@ class HapticFeedbackManager {
         print("🛑 Continuous haptics stopped")
     }
 
-    /// Updates haptic intensity based on depth value (0.0 = far, 1.0 = close)
+    /// Updates haptic intensity based on proximity value (1.0 = close, 0.0 = far)
     /// - Parameter depth: Normalized depth value where higher = closer
     func updateIntensity(forDepth depth: Float) {
         guard isRunning else {

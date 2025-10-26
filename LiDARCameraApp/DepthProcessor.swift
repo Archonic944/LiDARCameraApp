@@ -11,12 +11,12 @@ import CoreImage
 
 /// Extends CVPixelBuffer with normalization capabilities
 extension CVPixelBuffer {
-    /// Normalizes the pixel buffer values to 0-1 range using fixed range
+    /// Normalizes the pixel buffer values to 0-1 range using fixed range. 1 is closer, 9 is farther.
     /// - Parameters:
-    ///   - minDisparity: Minimum disparity value (far objects)
-    ///   - maxDisparity: Maximum disparity value (near objects)
+    ///   - minDisparity: Minimum depth value (meters)
+    ///   - maxDisparity: Maximum depth (meters)
     /// - Note: Modifies the buffer in-place. Values outside range are clamped.
-    func normalize(minDisparity: Float, maxDisparity: Float) {
+    func normalize(minDepth: Float, maxDepth: Float) {
         let width = CVPixelBufferGetWidth(self)
         let height = CVPixelBufferGetHeight(self)
 
@@ -30,18 +30,19 @@ extension CVPixelBuffer {
         let count = width * height
 
         // Normalize to 0-1 range using fixed range
-        let range = maxDisparity - minDisparity
+        let range = maxDepth - minDepth
         guard range > 0 else {
             CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
+            print("Warning: early return, range negative")
             return
         }
 
         for i in 0..<count {
             let value = floatPixels[i]
             if value.isFinite {
-                // Normalize and clamp to 0-1 range
-                let normalized = (value - minDisparity) / range
-                floatPixels[i] = max(0.0, min(1.0, normalized))
+                // Normalize, clamp to 0-1 range, and invert
+                let normalized = (value - minDepth) / range
+                floatPixels[i] = 1-max(0.0, min(1.0, normalized))
             }
         }
 
@@ -74,10 +75,10 @@ class DepthProcessor {
     // MARK: - Properties
 
     /// Default minimum disparity value (meters)
-    public static var defaultMinDisparity: Float = 1.639
+    public static var defaultMinDisparity: Float = 1.321
 
     /// Default maximum disparity value (meters)
-    public static var defaultMaxDisparity: Float = 1.321
+    public static var defaultMaxDisparity: Float = 1.639
     
     /// Aperture size; the radius of the region sampled (0-1)
     public static var APERTURE_SIZE = 0.2
@@ -101,7 +102,7 @@ class DepthProcessor {
         let depthMap = convertedDepth.depthDataMap
         //depthMap.square()
         // Normalize to 0-1 range using fixed disparity range
-        depthMap.normalize(minDisparity: minDisparity, maxDisparity: maxDisparity)
+        depthMap.normalize(minDepth: minDisparity, maxDepth: maxDisparity)
 
         return depthMap
     }
