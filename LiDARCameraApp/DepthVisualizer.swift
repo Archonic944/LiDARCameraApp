@@ -33,16 +33,25 @@ class DepthVisualizer {
 
     /// Converts a depth map to a colorized CGImage
     /// - Parameters:
-    ///   - depthMap: Normalized depth pixel buffer
+    ///   - depthMap: Depth pixel buffer in METERS
     ///   - orientation: Device orientation for proper rotation
     ///   - targetSize: Size to scale the output to
+    ///   - minDepth: Minimum depth in meters (for proximity conversion)
+    ///   - maxDepth: Maximum depth in meters (for proximity conversion)
     /// - Returns: Rendered CGImage of the depth overlay
     func visualizeDepth(depthMap: CVPixelBuffer,
                        orientation: AVCaptureVideoOrientation,
-                       targetSize: CGSize) -> CGImage? {
+                       targetSize: CGSize,
+                       minDepth: Float,
+                       maxDepth: Float) -> CGImage? {
 
-        // Create CIImage from depth map
-        var ciDepth = CIImage(cvPixelBuffer: depthMap)
+        // Convert meters to proximity (0-1) for visualization
+        guard let proximityMap = depthMap.convertMetersToProximity(minDepth: minDepth, maxDepth: maxDepth) else {
+            return nil
+        }
+
+        // Create CIImage from proximity map
+        var ciDepth = CIImage(cvPixelBuffer: proximityMap)
 
         // Apply false color mapping
         ciDepth = applyFalseColor(to: ciDepth)

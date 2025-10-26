@@ -447,22 +447,27 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
             }
         }
 
-        // Sample center depth for haptic feedback
-        let centerDepth = depthProcessor.sampleCenterDepth(from: processedDepthMap)
+        // Sample center depth for haptic feedback (in meters)
+        let centerDepthMeters = depthProcessor.sampleCenterDepth(from: processedDepthMap)
+
+        // Convert meters to proximity (0=far, 1=close) for haptic feedback
+        let proximity = depthProcessor.metersToProximity(centerDepthMeters)
 
         // Update haptic intensity based on proximity
-        // Higher depth value = closer object = stronger vibration
-        hapticManager.updateIntensity(forDepth: centerDepth)
+        // Higher proximity value = closer object = stronger vibration
+        hapticManager.updateIntensity(forDepth: proximity)
 
         // Get current orientation and screen size
         guard let videoOrientation = previewLayer.connection?.videoOrientation else { return }
         let viewSize = UIScreen.main.bounds.size
 
-        // Visualize depth data
+        // Visualize depth data (pass min/max for proximity conversion)
         guard let depthImage = depthVisualizer.visualizeDepth(
             depthMap: processedDepthMap,
             orientation: videoOrientation,
-            targetSize: viewSize
+            targetSize: viewSize,
+            minDepth: depthProcessor.minDisparity,
+            maxDepth: depthProcessor.maxDisparity
         ) else { return }
 
         // Update depth UI on main thread

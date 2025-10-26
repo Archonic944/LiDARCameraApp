@@ -9,63 +9,69 @@ import Foundation
 import AVFoundation
 import CoreImage
 
-/// Extends CVPixelBuffer with normalization capabilities
+/// Extends CVPixelBuffer with depth conversion utilities
 extension CVPixelBuffer {
-    /// Normalizes the pixel buffer values to 0-1 range using fixed range. 1 is closer, 9 is farther.
+    /// Converts meter values to normalized proximity (0-1) where 0=far, 1=close
+    /// Creates a NEW pixel buffer, preserves original meter values
     /// - Parameters:
-    ///   - minDisparity: Minimum depth value (meters)
-    ///   - maxDisparity: Maximum depth (meters)
-    /// - Note: Modifies the buffer in-place. Values outside range are clamped.
-    func normalize(minDepth: Float, maxDepth: Float) {
+    ///   - minDepth: Minimum depth value (meters) - closest distance
+    ///   - maxDepth: Maximum depth value (meters) - farthest distance
+    /// - Returns: New CVPixelBuffer with proximity values (0-1)
+    func convertMetersToProximity(minDepth: Float, maxDepth: Float) -> CVPixelBuffer? {
         let width = CVPixelBufferGetWidth(self)
         let height = CVPixelBufferGetHeight(self)
 
-        CVPixelBufferLockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
-        guard let floatBuffer = CVPixelBufferGetBaseAddress(self) else {
-            CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
-            return
+        // Create new pixel buffer for output
+        var newPixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_DepthFloat32,
+            nil,
+            &newPixelBuffer
+        )
+
+        guard status == kCVReturnSuccess, let outputBuffer = newPixelBuffer else {
+            return nil
         }
 
-        let floatPixels = floatBuffer.assumingMemoryBound(to: Float.self)
+        // Lock both buffers
+        CVPixelBufferLockBaseAddress(self, .readOnly)
+        CVPixelBufferLockBaseAddress(outputBuffer, CVPixelBufferLockFlags(rawValue: 0))
+
+        defer {
+            CVPixelBufferUnlockBaseAddress(self, .readOnly)
+            CVPixelBufferUnlockBaseAddress(outputBuffer, CVPixelBufferLockFlags(rawValue: 0))
+        }
+
+        guard let inputBuffer = CVPixelBufferGetBaseAddress(self),
+              let outputBaseAddress = CVPixelBufferGetBaseAddress(outputBuffer) else {
+            return nil
+        }
+
+        let inputPixels = inputBuffer.assumingMemoryBound(to: Float.self)
+        let outputPixels = outputBaseAddress.assumingMemoryBound(to: Float.self)
         let count = width * height
 
-        // Normalize to 0-1 range using fixed range
         let range = maxDepth - minDepth
         guard range > 0 else {
-            CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
-            print("Warning: early return, range negative")
-            return
+            return nil
         }
 
+        // Convert meters to proximity: 0=far, 1=close
         for i in 0..<count {
-            let value = floatPixels[i]
-            if value.isFinite {
-                // Normalize, clamp to 0-1 range, and invert
-                let normalized = (value - minDepth) / range
-                floatPixels[i] = 1-max(0.0, min(1.0, normalized))
+            let metersValue = inputPixels[i]
+            if metersValue.isFinite {
+                let normalized = (metersValue - minDepth) / range
+                let clamped = max(0.0, min(1.0, normalized))
+                outputPixels[i] = 1.0 - clamped  // Invert: close objects = high proximity
+            } else {
+                outputPixels[i] = 0.0
             }
         }
 
-        CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
-    }
-    
-    func square(){
-        let width = CVPixelBufferGetWidth(self)
-        let height = CVPixelBufferGetHeight(self)
-        
-        CVPixelBufferLockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
-        guard let floatBuffer = CVPixelBufferGetBaseAddress(self) else{
-            CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
-            return
-        }
-        let floatPixels = floatBuffer.assumingMemoryBound(to: Float.self)
-        let count = width * height
-        
-        for i in 0..<count {
-            floatPixels[i] *= floatPixels[i]
-        }
-        
-        CVPixelBufferUnlockBaseAddress(self, CVPixelBufferLockFlags(rawValue: 0))
+        return outputBuffer
     }
 }
 
@@ -74,36 +80,32 @@ class DepthProcessor {
 
     // MARK: - Properties
 
-    /// Default minimum disparity value (meters)
-    public static var defaultMinDisparity: Float = 1.321
+    /// Default minimum depth value in meters (closest distance)
+    public static var defaultMinDepth: Float = 1.321
 
-    /// Default maximum disparity value (meters)
-    public static var defaultMaxDisparity: Float = 1.639
-    
+    /// Default maximum depth value in meters (farthest distance)
+    public static var defaultMaxDepth: Float = 1.639
+
     /// Aperture size; the radius of the region sampled (0-1)
     public static var APERTURE_SIZE = 0.2
 
-    /// Minimum disparity value for normalization (corresponds to ~5m)
-    /// Disparity is inverse of distance, so lower values = farther objects
-    var minDisparity: Float = DepthProcessor.defaultMinDisparity
+    /// Minimum depth value in meters (closest distance in range)
+    var minDisparity: Float = DepthProcessor.defaultMinDepth
 
-    /// Maximum disparity value for normalization (corresponds to ~0.5m)
-    /// Higher values = closer objects
-    var maxDisparity: Float = DepthProcessor.defaultMaxDisparity
+    /// Maximum depth value in meters (farthest distance in range)
+    var maxDisparity: Float = DepthProcessor.defaultMaxDepth
 
     // MARK: - Public Methods
 
-    /// Converts and normalizes depth data for visualization
+    /// Converts depth data to meters format (preserves raw meter values)
     /// - Parameter depthData: Raw depth data from camera
-    /// - Returns: Normalized depth map as CVPixelBuffer
+    /// - Returns: Depth map in meters as CVPixelBuffer (Float32)
     func processDepthData(_ depthData: AVDepthData) -> CVPixelBuffer {
-        // Convert to 32-bit floating-point disparity format
+        // Convert to 32-bit floating-point depth format (METERS, not disparity!)
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         let depthMap = convertedDepth.depthDataMap
-        //depthMap.square()
-        // Normalize to 0-1 range using fixed disparity range
-        depthMap.normalize(minDepth: minDisparity, maxDepth: maxDisparity)
 
+        // Return raw meter values - don't modify!
         return depthMap
     }
 
@@ -111,8 +113,8 @@ class DepthProcessor {
     /// - Parameter depthData: Raw depth data from camera
     /// - Note: Uses 5th and 95th percentiles to eliminate outliers
     func calibrateToCurrentFrame(from depthData: AVDepthData) {
-        // Convert to 32-bit floating-point disparity format
-        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        // Convert to 32-bit floating-point METERS format
+        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         let depthMap = convertedDepth.depthDataMap
 
         guard let (p5, p95) = calculatePercentiles(from: depthMap) else {
@@ -124,14 +126,14 @@ class DepthProcessor {
         minDisparity = p5
         maxDisparity = p95
 
-        print("🎯 Calibrated to scene: P5=\(p5), P95=\(p95) (range: \(p95 - p5))")
+        print("🎯 Calibrated to scene: P5=\(String(format: "%.2f", p5))m, P95=\(String(format: "%.2f", p95))m (range: \(String(format: "%.2f", p95 - p5))m)")
     }
 
     /// Resets the depth range to default values
     func resetToDefaultRange() {
-        minDisparity = DepthProcessor.defaultMinDisparity
-        maxDisparity = DepthProcessor.defaultMaxDisparity
-        print("🔄 Reset to defaults: min=\(DepthProcessor.defaultMinDisparity), max=\(DepthProcessor.defaultMaxDisparity)")
+        minDisparity = DepthProcessor.defaultMinDepth
+        maxDisparity = DepthProcessor.defaultMaxDepth
+        print("🔄 Reset to defaults: min=\(String(format: "%.2f", DepthProcessor.defaultMinDepth))m, max=\(String(format: "%.2f", DepthProcessor.defaultMaxDepth))m")
     }
 
     /// Calculates 5th and 95th percentiles from depth buffer
@@ -187,9 +189,9 @@ class DepthProcessor {
 
     /// Samples average depth from a center aperture region
     /// - Parameters:
-    ///   - depthMap: Normalized depth pixel buffer
+    ///   - depthMap: Depth pixel buffer in METERS
     ///   - apertureSize: Size of the center region to sample (0.0 to 1.0, as fraction of image)
-    /// - Returns: Average normalized depth value (0.0 = far, 1.0 = close)
+    /// - Returns: Average depth in METERS
     func sampleCenterDepth(from depthMap: CVPixelBuffer, apertureSize: CGFloat = APERTURE_SIZE) -> Float {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
@@ -230,5 +232,15 @@ class DepthProcessor {
         }
 
         return count > 0 ? sum / Float(count) : 0.0
+    }
+
+    /// Converts a single meter value to proximity (0-1) where 0=far, 1=close
+    func metersToProximity(_ meters: Float) -> Float {
+        let range = maxDisparity - minDisparity
+        guard range > 0 else { return 0.0 }
+
+        let normalized = (meters - minDisparity) / range
+        let clamped = max(0.0, min(1.0, normalized))
+        return 1.0 - clamped  // Invert: close = high proximity
     }
 }

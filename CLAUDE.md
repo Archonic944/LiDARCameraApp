@@ -5,8 +5,19 @@ An iOS application that displays a real-time LiDAR depth overlay on the camera p
 ## Overview
 
 This app uses the iPhone/iPad's LiDAR sensor to capture depth data and display it as a colored overlay on top of the camera feed. Objects are color-coded based on distance:
-- **Red**: Close objects (high disparity)
-- **Blue**: Far objects (low disparity)
+- **Red**: Close objects (high proximity, low meter values)
+- **Blue**: Far objects (low proximity, high meter values)
+
+## IMPORTANT: Code Modification Guidelines
+
+**⚠️ DO NOT change hardcoded calibration values unless explicitly requested by the user.**
+
+The default depth range values (e.g., `defaultMinDepth = 1.321`, `defaultMaxDepth = 1.639`) are **carefully tuned and calibrated** for specific use cases. These values may seem arbitrary but have been empirically determined. Do not suggest "sensible" or "standard" values (like 0.5m to 5.0m) as replacements without explicit user request.
+
+When modifying code:
+- **Preserve** existing numeric constants unless asked to change them
+- **Ask** before suggesting value changes that seem more "intuitive"
+- **Respect** that unusual values (like 1.321m) are intentionally calibrated
 
 ## Architecture
 
@@ -53,47 +64,57 @@ The main view controller that:
 - MARK comments for code organization
 
 ### DepthProcessor.swift
-**Responsibility**: Depth data processing, normalization, and calibration
+**Responsibility**: Depth data processing and calibration (preserves raw meter values)
 
 Handles:
-- Converting AVDepthData to 32-bit float disparity format
-- Normalizing depth values to 0-1 range using fixed disparity range
+- Converting AVDepthData to 32-bit float **depth format (meters, not disparity!)**
+- **Preserving raw meter values** throughout pipeline
 - CVPixelBuffer manipulation
-- Center aperture sampling for haptic feedback
+- Center aperture sampling for haptic feedback (returns meters)
 - **Tap-to-calibrate range adjustment**
+- On-demand conversion from meters to proximity (0-1)
 
 **Key Features**:
-- Extension on CVPixelBuffer for reusable normalization
-- Fixed range normalization for consistent depth visualization
-- Configurable min/max disparity values (default: 0.2 to 4.0)
+- Extension on CVPixelBuffer for `convertMetersToProximity()` (creates new buffer, non-destructive)
+- Fixed range for consistent depth visualization
+- Configurable min/max depth values in meters (default: `defaultMinDepth = 1.321m`, `defaultMaxDepth = 1.639m`)
 - Thread-safe operations
-- `calibrateRange()` method for dynamic range adjustment
+- `metersToProximity()` helper for single-value conversion
+- `calibrateToCurrentFrame()` method for dynamic range adjustment
 
-**Normalization Strategy**:
-- Uses **fixed range normalization** instead of per-frame min/max
-- Ensures consistent color mapping across frames
-- Objects at the same distance always show the same color
-- Values outside range are clamped to 0-1
-- Default range: minDisparity=0.2 (~5m), maxDisparity=4.0 (~0.25m)
+**Data Preservation Strategy**:
+- **Does NOT mutate original depth buffers** - raw meter values preserved
+- `processDepthData()` returns CVPixelBuffer with Float32 meter values
+- Proximity conversion happens **on-demand** in DepthVisualizer and for haptics
+- All downstream components can access real-world measurements
+
+**Proximity Conversion** (0-1 range):
+- **0.0 = far** (at or beyond maxDepth)
+- **1.0 = close** (at or below minDepth)
+- Formula: `proximity = 1.0 - clamp((meters - minDepth) / (maxDepth - minDepth))`
+- Used for visualization (color mapping) and haptic feedback (intensity)
 
 **Calibration Method**:
 - `calibrateToCurrentFrame(from:)` analyzes entire depth frame
 - `calculatePercentiles(from:)` helper extracts valid values, sorts, and computes P5/P95
-- Sets new min/max range based on scene statistics
-- Ensures minimum range of 0.1 to avoid division by zero
+- Sets new min/max range based on scene statistics (in meters)
+- Ensures minimum range of 0.1m to avoid division by zero
 
 ### DepthVisualizer.swift
 **Responsibility**: Rendering depth data as visual overlays
 
 Manages:
+- **On-demand conversion from meters to proximity** (0-1) for visualization
 - False color mapping (configurable colors)
 - Orientation transforms for device rotation
 - Aspect-fill scaling and cropping
 - CGImage rendering
 
 **Key Features**:
+- Takes raw meter buffers and min/max depth parameters
+- Converts meters → proximity using `convertMetersToProximity()` before color mapping
 - Encapsulates all Core Image operations
-- Configurable color scheme (farColor, nearColor properties)
+- Configurable color scheme (farColor=blue, nearColor=red properties)
 - Reusable CIContext for performance
 - Private helper methods for single-responsibility functions
 
@@ -168,27 +189,30 @@ Manages:
    - AVCaptureDepthDataOutput streams depth frames from LiDAR camera
    - AVCaptureVideoDataOutput streams RGB frames from camera
 2. **Process** (DepthProcessor):
-   - Convert to 32-bit floating-point disparity format
-   - Normalize depth values to 0-1 range using fixed disparity range (0.2 to 4.0)
-   - Values are clamped to ensure consistent visualization across frames
-   - Sample center aperture for haptic feedback
+   - Convert to 32-bit floating-point **depth format (METERS)** using `kCVPixelFormatType_DepthFloat32`
+   - **Preserve raw meter values** - no in-place mutation
+   - Sample center aperture for haptic feedback (returns meters)
 3. **Edge Detection** (EdgeDetectorGPU):
    - RGB edge detection: Sobel filter on camera feed (GPU)
-   - Depth edge detection: Sobel filter on depth map (GPU)
+   - Depth edge detection: Sobel filter on **raw meter values** (GPU)
    - Edge fusion: Weighted combination of RGB + depth edges (GPU)
    - All operations run on Metal GPU for real-time performance (<10ms)
    - Store edge map for visualization
 4. **Haptic Feedback** (HapticFeedbackManager):
-   - Receive average center depth (0.0 = far, 1.0 = close)
+   - Receive average center depth **in meters** from DepthProcessor
+   - Convert to proximity (0-1) using `metersToProximity()`: **0.0 = far, 1.0 = close**
    - Update continuous vibration intensity
-   - Stronger vibration for closer objects
+   - Stronger vibration for closer objects (higher proximity)
 5. **Visualize** (DepthVisualizer):
-   - Depth: Apply false color filter (blue→red gradient)
+   - Convert meters → proximity (0-1) using `convertMetersToProximity()` with min/max depth range
+   - Depth: Apply false color filter to proximity values (blue=far, red=close)
    - Edges: Apply false color filter (transparent→green gradient)
    - Apply orientation transform
    - Scale and crop to screen size
    - Render to CGImage
 6. **Display**: Update UIImageViews on main thread (depth + edges)
+
+**Key Architecture Principle**: Raw meter values flow through the pipeline unchanged. Proximity conversion (0-1) happens **on-demand** only where needed (visualization, haptics).
 
 ### Orientation Handling
 
@@ -205,9 +229,10 @@ The oriented image is then translated to origin to ensure correct extent coordin
 The haptic feedback system acts like a "walking stick for the blind":
 
 **How It Works**:
-- Continuously samples a small center "aperture" (15% of frame)
-- Averages depth values in that region
-- Maps depth to vibration intensity (0-100%)
+- Continuously samples a small center "aperture" (20% of frame)
+- Averages **depth values in meters** in that region
+- Converts meters to proximity (0-1) where 0=far, 1=close
+- Maps proximity to vibration intensity (0-100%)
 - Updates haptic engine in real-time
 
 **Technical Implementation**:
@@ -238,8 +263,9 @@ Average depth in this region determines vibration strength.
 - UI updates dispatched to main thread using `@MainActor`
 - Depth filtering enabled for smoother visualization
 - Reusable CIContext to avoid repeated initialization
-- In-place pixel buffer normalization
+- **Non-destructive proximity conversion** - creates new buffers only when needed
 - Haptic updates throttled by depth frame rate (~30fps)
+- Edge detection runs on separate GPU queue, processes every 3rd frame
 
 ## Code Organization
 
@@ -275,7 +301,8 @@ This structure makes the code easier to test, modify, and understand.
 - ✅ Photo capture with embedded depth data
 - ✅ Transparent overlay (80% opacity) to see camera feed
 - ✅ Configurable color schemes (via DepthVisualizer properties)
-- ✅ Configurable depth range (via DepthProcessor min/maxDisparity properties)
+- ✅ Configurable depth range in meters (via DepthProcessor minDisparity/maxDisparity properties)
+- ✅ **Preserved raw meter values** throughout pipeline for accurate measurements
 - ✅ Automatic haptic engine recovery from interruptions
 - ✅ Visual focus indicator with smooth animations
 
@@ -296,10 +323,12 @@ The app implements real-time edge detection by combining RGB camera and LiDAR de
 
 **How It Works**:
 1. **RGB Edge Detection**: Apply Sobel gradient filter to grayscale camera feed (GPU via CISobelGradients)
-2. **Depth Edge Detection**: Apply Sobel gradient filter to normalized depth map (GPU via CISobelGradients)
+2. **Depth Edge Detection**: Apply Sobel gradient filter to **raw meter depth map** (GPU via CISobelGradients)
 3. **Depth Edge Amplification**: Multiply depth edges by 2.0 using color matrix (GPU)
 4. **Weighted Fusion**: Combine RGB edges (50%) and depth edges (50%) using addition compositing (GPU)
 5. **Output**: Normalized edge strength map (CVPixelBuffer, 0-1 range)
+
+**Note**: Edge detection operates directly on raw meter values from LiDAR, detecting geometric discontinuities in real-world distance measurements.
 
 **Why Multi-Modal**:
 - **RGB edges** capture photometric discontinuities: texture changes, painted lines, color boundaries
@@ -366,10 +395,10 @@ This workaround is necessary because setting a longer duration (e.g., 3600s) wil
 - Recording video with depth overlay
 - 3D point cloud visualization
 - Depth map export (as image or data file)
-- Display actual distance values on screen (convert disparity to meters)
+- ✅ **Display actual distance values on screen** (raw meter values already available in pipeline!)
 - Customizable percentile thresholds (currently P5/P95)
-- Double-tap to reset to default range
 - Histogram visualization of depth distribution
+- Real-time depth value readout at tap location
 
 ### Code Quality
 - Unit tests for DepthProcessor, DepthVisualizer, and HapticFeedbackManager
