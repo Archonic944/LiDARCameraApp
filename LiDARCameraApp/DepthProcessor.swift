@@ -73,11 +73,11 @@ class DepthProcessor {
 
     // MARK: - Properties
 
-    /// Default minimum disparity value (corresponds to ~5m)
-    public static var defaultMinDisparity: Float = 0.610
+    /// Default minimum disparity value (meters)
+    public static var defaultMinDisparity: Float = 1.639
 
-    /// Default maximum disparity value (corresponds to ~0.25m)
-    public static var defaultMaxDisparity: Float = 0.757
+    /// Default maximum disparity value (meters)
+    public static var defaultMaxDisparity: Float = 1.321
     
     /// Aperture size; the radius of the region sampled (0-1)
     public static var APERTURE_SIZE = 0.2
@@ -97,7 +97,7 @@ class DepthProcessor {
     /// - Returns: Normalized depth map as CVPixelBuffer
     func processDepthData(_ depthData: AVDepthData) -> CVPixelBuffer {
         // Convert to 32-bit floating-point disparity format
-        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         let depthMap = convertedDepth.depthDataMap
         //depthMap.square()
         // Normalize to 0-1 range using fixed disparity range
