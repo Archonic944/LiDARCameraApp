@@ -44,7 +44,7 @@ class EdgeDetectorGPU {
     /// Edges below this value are filtered out
     /// Lower values = more edges visible, higher values = only strong edges
     /// Default: 0.1
-    var edgeThreshold: CGFloat = 0.6
+    var edgeThreshold: CGFloat = 0.4
 
     /// Enable/disable edge thresholding
     /// When false, all edges are shown regardless of strength
@@ -103,6 +103,16 @@ class EdgeDetectorGPU {
         // Convert depth map to CIImage
         var ciDepth = CIImage(cvPixelBuffer: depthMap)
         let originalExtent = ciDepth.extent
+
+        if let clampFilter = CIFilter(name: "CIColorClamp") {
+            clampFilter.setValue(ciDepth, forKey: kCIInputImageKey)
+            // Clamp to reasonable range: [0, 99] meters (handles NaN/Inf)
+            clampFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: 0), forKey: "inputMinComponents")
+            clampFilter.setValue(CIVector(x: 99, y: 99, z: 99, w: 1), forKey: "inputMaxComponents")
+            if let output = clampFilter.outputImage {
+                ciDepth = output
+            }
+        }
 
         // PERFORMANCE OPTIMIZATION: Downscale before processing (4-16x speedup!)
         if downscaleFactor < 1.0 {
