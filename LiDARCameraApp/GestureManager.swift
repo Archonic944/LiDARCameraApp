@@ -23,11 +23,29 @@ class GestureManager {
     private var focusIndicator: UIView!
     private weak var parentView: UIView?
 
+    // MARK: - Edge Holding State
+
+    /// Configurable margin from screen edge to detect edge holds (in points)
+    var edgeMargin: CGFloat = 100.0
+
+    /// Current edge holding states (can be queried at any time)
+    private(set) var isHoldingLeftEdge: Bool = false
+    private(set) var isHoldingRightEdge: Bool = false
+    private(set) var isHoldingTopEdge: Bool = false
+    private(set) var isHoldingBottomEdge: Bool = false
+
+    // Edge visual indicators
+    private var leftEdgeIndicator: UIView!
+    private var rightEdgeIndicator: UIView!
+    private var topEdgeIndicator: UIView!
+    private var bottomEdgeIndicator: UIView!
+
     // MARK: - Initialization
 
     init(parentView: UIView) {
         self.parentView = parentView
         setupFocusIndicator()
+        setupEdgeIndicators()
     }
 
     // MARK: - Setup
@@ -41,6 +59,52 @@ class GestureManager {
         focusIndicator.backgroundColor = .clear
         focusIndicator.isHidden = true
         parentView.addSubview(focusIndicator)
+    }
+
+    private func setupEdgeIndicators() {
+        guard let parentView = parentView else { return }
+
+        let indicatorColor = UIColor.white.withAlphaComponent(0.2)
+
+        // Left edge indicator
+        leftEdgeIndicator = UIView()
+        leftEdgeIndicator.backgroundColor = indicatorColor
+        leftEdgeIndicator.alpha = 0
+        leftEdgeIndicator.isUserInteractionEnabled = false
+        parentView.addSubview(leftEdgeIndicator)
+
+        // Right edge indicator
+        rightEdgeIndicator = UIView()
+        rightEdgeIndicator.backgroundColor = indicatorColor
+        rightEdgeIndicator.alpha = 0
+        rightEdgeIndicator.isUserInteractionEnabled = false
+        parentView.addSubview(rightEdgeIndicator)
+
+        // Top edge indicator
+        topEdgeIndicator = UIView()
+        topEdgeIndicator.backgroundColor = indicatorColor
+        topEdgeIndicator.alpha = 0
+        topEdgeIndicator.isUserInteractionEnabled = false
+        parentView.addSubview(topEdgeIndicator)
+
+        // Bottom edge indicator
+        bottomEdgeIndicator = UIView()
+        bottomEdgeIndicator.backgroundColor = indicatorColor
+        bottomEdgeIndicator.alpha = 0
+        bottomEdgeIndicator.isUserInteractionEnabled = false
+        parentView.addSubview(bottomEdgeIndicator)
+    }
+
+    /// Update edge indicator frames based on parent view bounds
+    func updateEdgeIndicatorFrames() {
+        guard let parentView = parentView else { return }
+        let bounds = parentView.bounds
+        let thickness: CGFloat = 12.0
+
+        leftEdgeIndicator.frame = CGRect(x: 0, y: 0, width: thickness, height: bounds.height)
+        rightEdgeIndicator.frame = CGRect(x: bounds.width - thickness, y: 0, width: thickness, height: bounds.height)
+        topEdgeIndicator.frame = CGRect(x: 0, y: 0, width: bounds.width, height: thickness)
+        bottomEdgeIndicator.frame = CGRect(x: 0, y: bounds.height - thickness, width: bounds.width, height: thickness)
     }
 
     /// Adds tap gesture recognizers to the specified view
@@ -57,6 +121,81 @@ class GestureManager {
 
         // Require double tap to fail before single tap fires (prevents both from firing)
         tapGesture.require(toFail: doubleTapGesture)
+    }
+
+    // MARK: - Touch Tracking
+
+    /// Call this from touchesBegan/touchesMoved to update edge holding state
+    func updateTouchState(touches: Set<UITouch>, in view: UIView) {
+        guard let parentView = parentView else { return }
+        let bounds = parentView.bounds
+
+        // Reset all states
+        var leftHeld = false
+        var rightHeld = false
+        var topHeld = false
+        var bottomHeld = false
+
+        // Check all active touches
+        for touch in touches {
+            let location = touch.location(in: view)
+
+            // Check each edge
+            if location.x <= edgeMargin {
+                leftHeld = true
+            }
+            if location.x >= bounds.width - edgeMargin {
+                rightHeld = true
+            }
+            if location.y <= edgeMargin {
+                topHeld = true
+            }
+            if location.y >= bounds.height - edgeMargin {
+                bottomHeld = true
+            }
+        }
+
+        // Update states and visual feedback
+        updateEdgeState(left: leftHeld, right: rightHeld, top: topHeld, bottom: bottomHeld)
+    }
+
+    /// Call this from touchesEnded/touchesCancelled to clear edge holding state
+    func clearTouchState() {
+        updateEdgeState(left: false, right: false, top: false, bottom: false)
+    }
+
+    private func updateEdgeState(left: Bool, right: Bool, top: Bool, bottom: Bool) {
+        // Update left edge
+        if isHoldingLeftEdge != left {
+            isHoldingLeftEdge = left
+            UIView.animate(withDuration: 0.15) {
+                self.leftEdgeIndicator.alpha = left ? 1.0 : 0.0
+            }
+        }
+
+        // Update right edge
+        if isHoldingRightEdge != right {
+            isHoldingRightEdge = right
+            UIView.animate(withDuration: 0.15) {
+                self.rightEdgeIndicator.alpha = right ? 1.0 : 0.0
+            }
+        }
+
+        // Update top edge
+        if isHoldingTopEdge != top {
+            isHoldingTopEdge = top
+            UIView.animate(withDuration: 0.15) {
+                self.topEdgeIndicator.alpha = top ? 1.0 : 0.0
+            }
+        }
+
+        // Update bottom edge
+        if isHoldingBottomEdge != bottom {
+            isHoldingBottomEdge = bottom
+            UIView.animate(withDuration: 0.15) {
+                self.bottomEdgeIndicator.alpha = bottom ? 1.0 : 0.0
+            }
+        }
     }
 
     // MARK: - Gesture Handling
