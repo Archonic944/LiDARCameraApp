@@ -1,0 +1,599 @@
+Abstract— This paper presents a method of occluding depth
+edge-detection targeted towards RGB-D video streams and
+explores the use of these and other edge features in RGB-D
+SLAM. The proposed depth edge-detection approach uses prior
+information obtained from the previous RGB-D video frame to
+determine which areas of the current depth image are likely to
+contain edges due to image similarity. By limiting the search
+for edges to these areas a significant amount of computation
+time is saved compared to searching the entire image. Pixels
+belonging to both the depth and colour edges of an RGB-D
+image can be back projected using the depth component to
+form 3D point clouds of edge points. Registration between such
+edge point clouds is achieved using ICP and we present a real-
+time RGB-D SLAM system utilizing such back projected edge
+features. Experimental results are presented demonstrating the
+performance of both the proposed depth edge-detection and
+SLAM system using publicly available datasets.
+
+ INTRODUCTION
+Autonomous navigation and exploration using simultane-
+ous localization and mapping (SLAM) is an area of great
+activity and interest in robotics. The capability of conducting
+such tasks with cameras and computer vision is particularly
+desirable due to camera sensors generally being low cost
+and in readily available. However the necessity of real-
+time performance along with many persistent issues such
+as camera blur, varying lighting levels, dynamic objects and
+potential lack of visual features in a scene make this a highly
+challenging area. RGB-D sensors, providing both visual
+and geometric depth information, have seen increasingly
+widespread use in the field of SLAM. The additional geomet-
+ric information such sensors provide makes the problem of
+SLAM more tractable, and as such RGB-D SLAM is an area
+of increasing activity. This paper presents a fast depth edge-
+detection approach for RGB-D video outlined in Section III,
+exploiting both the temporal image similarity between video
+frames and the ordered structure of the images themselves.
+The edges present in an image typically occupy a small
+fraction of total pixels present. However, in many cases this
+set of edge pixels may still retain much of the important
+structure and details of the original image. This ability to
+provide a compact yet descriptive representation of a scene
+makes edges a good candidate for use as features for real-
+time SLAM. In the case of RGB-D sensors, edges can
+be found in both the color and depth images. The pixels
+corresponding to these sets of edges can then be back-
+projected to form 3D point clouds of edge points.
+
+Pair-wise registration between two sets of edge points
+can be achieved using the Iterative Closest Point (ICP)
+algorithm that is abundant throughout SLAM literature. This
+registration is generally far less computationally expensive
+than using ICP to register two entire RGB-D point clouds due
+to the vastly decreased number of points. Additionally when
+registering such edge point clouds, there are in general fewer
+incorrect local minimum which the ICP could potentially
+converge to. This has been shown to result in increased
+registration robustness and accuracy, given sufficient edges
+are present [1], [2]. We examine the application of such
+edge point cloud registration further in the edge-based SLAM
+system proposed in Section V.
+
+II. RELATED WORK
+Much work has been done in computer vision regarding
+the detection of different types of RGB image features and
+their utilization in SLAM. Many monocular camera based
+SLAM systems ([3], [4], [5]) utilize visual point features
+such as the well known SIFT [6] and SURF [7] feature
+descriptors. Other feature types such as edge-lets and lines
+have also been explored ([8], [9]) though to a lesser extent.
+Since the introduction of low cost RGB-D sensors such as
+the Microsoft Kinect, various approaches to RGB-D SLAM
+have been proposed. Many of these have made use of the ICP
+algorithm in some form [10], [11], [12]. One such approach
+is KinectFusion [13], which instead of attempting to detect
+and register specific feature types in the RGB-D images,
+used ICP to register the raw depth point clouds from the
+sensor against a dense 3D map of the environment. The
+demanding process of performing this registration in real-
+time however was only made possible with the use of a
+GPU. The operational volume of the original system was
+also limited due to the memory hungry representation of
+the environment. This problem was later addressed by the
+“Kintinuous” system created by Whelan et al. [14]. Another
+approach towards RGB-D SLAM was to maintain the use
+of visual point features detected in the RGB component,
+and use the additional depth information to back project
+them forming sparse point clouds [15], [16], [17]. These
+sparse point clouds could then be registered using ICP
+(enhanced with the feature information of each point). Other
+works investigated the use of certain features specific to the
+depth image. Planar surfaces are one such feature and many
+methods have been proposed to detect them efficiently [18],
+[19], [20], [21]. Such planar features are well suited for
+indoor targeted SLAM systems due to their abundance in
+man made environments. A number of SLAM systems using
+
+planar features alone or combined with other feature types
+have be demonstrated by [22], [23], [24]. Edges are another
+type of feature that can be found within depth images. These
+can take the form of edges due to sharp depth discontinuities
+caused by the occluding boundaries of physical objects or
+edges due to two differently orientated surfaces meeting
+such as two walls at right angles. However current work
+regarding the use of such features is more limited . Choi et
+al. [2] presented methods of edge detection in depth images.
+Occluding edges corresponding to local discontinuities in
+depth were found by examining each depth image pixel and
+its 8 local neighbours. Additionally high curvature edges in
+the depth image were detected by examining local surface
+normals, and the well known canny-edge-detector [25] was
+used to detect color edges in the RGB component. Each
+of these edge types was then investigated to see which
+provided the best trade off between tracking quality and
+performance in pair-wise registration. A SLAM system based
+on occluding edge features was then demonstrated, however
+due to high computational cost the reported implementation
+was not well suited for for real-time operation.
+This paper presents a method of detecting occluding depth
+edges from an RGB-D video stream. The given approach
+uses information that was acquired when performing depth
+edge-detection on the previous depth image to determine
+in which areas of the current depth image edges are likely
+to occur. This prior information is used to avoid searching
+areas of a depth image in which edges are not likely to be
+present. It will be shown that on average this results in a large
+computational saving while still detecting the vast majority of
+edge pixels compared to performing an edge-detection search
+on the entire depth image. To the best of our knowledge,
+this work is the first to utilize information gathered from the
+previous RGB-D frame to accelerate depth edge-detection.
+The proposed depth edge-detection approach is presented
+in Section III in two parts. A basic edge-detection method
+which operates upon an entire depth image in Section III-A
+and a modified version which only operates on specific areas
+of the depth image based on knowledge gathered from the
+previous depth image in Section III-B. Section IV discusses
+the use of RGB color edges. A SLAM system based on such
+edge features is presented in Section V. Finally experimental
+results and an evaluation of both the proposed edge-detection
+and SLAM system is presented in Section VI.
+
+Algorithm 1 P
+_
+Scan(P, T )
+Detect large differences between the values of neighbouring
+pixels indicating the presence of occluding edges
+INPUT: P= {(Vn, Ln) : n ∈{0...N }}
+// P is a list of depth pixels along a line
+// Vn value of nth pixel
+// Ln image location of nth pixel
+T // edge detection threshold ratio value
+OUTPUT: E= {} // edge pixel locations
+last
+_
+valid = 0 // index of the last observed valid pixel
+for n = 0 to N do
+if Vn ̸= 0 then // if current pixel value is valid
+threshold= M in(Vn, Vlast
+valid) ×T
+_
+// check for large differences between pixel values
+if (Vlast
+_
+valid−Vn) > threshold then
+E= E ∪Ln
+else
+if (Vn−Vlast
+_
+E= E ∪Llast
+end if
+end if
+last
+valid= n
+_
+end if
+end for
+return E
+
+III. OCCLUDING DEPTH EDGES
+
+The depth image component of an RGB-D video stream
+provides 3D geometric information of the scene in view.
+In such an image, physical objects occluding others further
+from the camera gives rise to discontinuities between the
+values of neighbouring pixels. Two types of edges arise from
+such discontinuities. Occluding edges whose pixels belong to
+geometric boundaries of foreground objects, and occluded
+edges whose pixels belong to those objects and surfaces
+being occluded. Note that occluded edges can be viewed
+as simply being the edges of "shadows" cast by occluding
+objects as illustrated in Figure 1.
+As such they do not actually physically represent objects in
+the scene and are not useful for SLAM or camera tracking
+purposes. The following edge-detection process inherently
+detects both types of edges, however occluded edges are
+simply ignored.
+
+A. Edge Detection by Row and Column Iteration
+We employ a two step search process to find pixels belong-
+ing to occluding edges within a depth image. This involves
+examining the pixels of the depth image twice, first by rows
+then by columns. In either case an identical process is used to
+locate local depth discontinuities within a given line of pixels
+(be it a row or column). This pixel search process, outlined
+in Algorithm 1, iterates over a given list of pixels, skipping
+over invalid pixels (of zero depth value) while keeping track
+of the last found valid pixel. At each iteration the value of
+the current pixel (if valid) is compared to that of the last
+
+found valid pixel. If the difference between these two values
+is above a certain threshold then this discontinuity in depth
+between nearby pixels is deemed large enough to indicate the
+presence of an occluding edge. If this is the case the pixel
+with the smaller of the two depth values (that being closer to
+the sensor) is identified as an occluding edge pixel. The other
+pixel which corresponds to an occluded edge is ignored. The
+prior mentioned threshold is given by d ×T where d is the
+smaller of the two pixel values and T is a sensitivity constant.
+Having such a proportional threshold is necessary due to
+the nature of structured light RGB-D sensors where, both
+noise and spacing between readable values is proportional
+to depth [26], [27]. The two steps of this search process
+constitute scanning across the depth image in two orthogonal
+directions (by rows going left to right and by columns going
+top to bottom). In practice the organised image structure is
+exploited to minimize the computational time of this process.
+B. Sub Image Edge Detection
+When working with a standard RGB-D video stream (30hz
+640 ×480), each depth image is likely highly similar to the
+previous one due to small camera movements between video
+frames. Occluding edge pixels are thus also likely to occur in
+similar locations from one depth image to the next due to this
+image similarity. This prior knowledge of where edge pixels
+are likely to occur can be exploited to significantly speed up
+the occluding edge detection process. This is done by only
+searching for edge pixels in specific areas of the depth image
+(around which edge pixels were previously detected) instead
+of simply searching the entire image in a brute force manner.
+Our implementation of this concept considers each depth
+image as consisting of an N ×M grid of smaller equally
+sized images (referred to as "image patches") rather than a
+single image. For example a grid size of 4×3 would consider
+a 640×480 depth image as consisting of 12 image patches of
+160 ×160 pixels each. An N ×M array of boolean flags F
+is also stored and used to determine which image patches
+should be searched for occluding edge pixels. With each
+new depth image from the RGB-D video stream, all image
+patches whose associated flag is set to true are searched
+using the same occluding edge-detection process described
+in Section III-A. Searched image patches in which no edge
+pixels are detected then have their associated flag reset to
+false. Conversely those image patches in which edge pixels
+were detected have both their own flag and those of their
+neighbouring patches set to true. By setting the values of he boolean array in this manner, the next image will only
+be searched for edges in those image patches located around
+where edge pixels were detected in the current image. While
+sufficient for detecting edge pixels belonging to edges that
+were also found in the previous image, this flagging scheme
+may fail to detect pixels belonging to new edges unique to
+the latest depth image (or edges that were simply not detected
+previously). To address this, with each new depth image a
+certain number edge-detection flags are randomly selected
+and set to true to facilitate the detection of new edges.
+The number of flags randomly selected in this manner (R)
+is determined by Equation 1 below.
+R= M ax(1, Round(N ×M ×rand
+_
+search)) (1)
+Here N × M is the number of image patches and
+rand
+_
+search ∈[0, 1] is a specific value relating to what
+percent of each depth image we wish to be randomly selected
+and searched for edges. Thus at least one image patch is
+always randomly searched, increasing up to all image patches
+(and thus the entire image) being searched as rand
+search
+_
+approaches 1. In this scheme the detection of new edge pixels
+may be delayed a number of frames until the flag associated
+with the image patch they reside in is randomly selected and
+set to true. This potential detection delay is one of the trade-
+offs for the reduced computation this approach provides. Us-
+ing higher values of rand
+_
+search ∈[0, 1] will decrease the
+average number of frames of this detection delay but increase
+the average computational cost of the whole occluding edge
+detection process. The value of rand
+search = 0.05 was
+_
+found to provide sufficiently small average detection delay
+and is used throughout the rest of this paper.
+Algorithm 2 outlines this entire edge-detection process
+taking a set of image patches P , edge-detection flags F
+and number of patches to randomly search R as inputs
+and returning a list of edge pixel locations E and updated
+boolean flags F . This algorithm can also take an additional
+parameter K determining which rows and columns of each
+image patch should be skipped over instead of being searched
+for edge pixels. For greater clarity we will refer to this
+parameter as rowcol
+_skip from now on. The default value
+rowcol
+_skip = 1 results in no rows/columns being skipped,
+with rowcol
+_skip = 2 only every other row/column is
+searched, rowcol
+_skip = 3 only every 3rd row/column
+is searched and so on. This parameter can be viewed as
+allowing downscaled edge detection search to be conducted,
+resulting in fewer edge pixels being returned (and thus
+sparser edge point clouds being created from these pixels).
+Examples of this approach illustrating the image patches grid
+and corresponding edge-detection flag values are show in
+Figure 2. Detailed results of running this proposed occluding
+edge detection on a number of RGB-D sequences are given
+in Section III-A.
+
+Algorithm 2 Occluding_Edge_
+Detection(P, F, T, R, K)
+Detect occluding depth edge pixels within flagged image
+patches and update edge detection flags
+// image patches P and their associated boolean flags F
+INPUT: P= {Pxy : x ∈{0...N }, y ∈{0...M }}
+F= {Fxy : x ∈{0...N }, y ∈{0...M }}
+T // edge detection threshold value
+R // number of patches to randomly search
+K // row and column skip value
+OUTPUT: E= {} // edge pixel locations
+Set R randomly selected flags from F to True
+for all Pij ∈P do
+if Fij then // if patch flagged for edge detection
+row
+_edges= {}
+col
+_edges= {}
+for all Kth rows R of image patch Pij do
+row
+_edges= row
+_edges ∪P
+_
+Scan(R, T )
+end for
+for all Kth columns C of image patch Pij do
+col
+_edges= col
+_edges ∪P
+_
+Scan(C, T )
+end for
+if row
+_edges ̸= {}or col
+_edges ̸= {}then
+E= E ∪row
+_edges ∪col
+_edges
+Fij= T rue
+Set flags of neighbouring image patches to True
+else
+Fij= F alse // reset patches flag
+end if
+end if
+end for
+return E, F
+
+IV. RGB EDGES
+Each frame of RGB-D video provides not only a depth
+image but a corresponding RGB color image. Edges present
+in this RGB image can be back-projected and used for
+pair-wise registration and SLAM in the same way as the
+occluding depth edges of Section III. In practice the detection
+of such RGB edges presents a more challenging problem than
+that of occluding depth edge-detection. There are a number
+of RGB image specific issues such as image blur and variable
+lighting levels. Additionally RGB images will generally have
+a higher detail density compared their corresponding depth
+image making the identification of edges more complex.
+
+
+Our employed method of RGB edge detection functions
+in a very similar way to the occluding depth edge-detection
+described in Section III-A, searching rows and columns of
+pixels from the RGB image for abrupt local changes in color
+values. Rows and columns can also similarly be skipped
+over as described by the use of the rowcol
+_skip parameter
+in the previous section. However it does not make use of
+any information from the previous RGB image, and simply
+searches all rows and columns of the image. We seek to
+improve or use an alternative RGB edge-detection method
+in the future work, however it is not the focus of this paper.
+It is important to note that we reject all RGB edge
+pixels located in close proximity to occluding depth edges
+in the corresponding depth image. The back projected points
+from such pixels can often be highly unreliable due to
+poor alignment and synchronisation between the depth and
+RGB data provided by the RGB-D sensor. Additionally it
+is highly likely that such RGB edge pixels are the result of
+an occluding foreground object, in which case an occluding
+depth edge will already be present in the same location. The
+occluding depth edge detection flags described in Section III-
+B are used to enable fast rejection of such unwanted RGB
+edge pixels.
+V. RGB-D EDGE SLAM
+The pixels belonging to the different types of edges in
+an RGB-D image can be back-projected to form 3D point
+clouds of edge points. Each of these clouds can be viewed
+as a down-sampling of the full RGB-D point cloud to only
+points expressing a specific type of information. Such edge
+point clouds are far smaller in size than the full cloud, but
+may still provide excellent information for localization. We
+created a SLAM system utilizing edge point clouds resulting
+from both the occluding depth edges discussed in Sections III
+and RGB edges discussed in Section IV. It was shown by [2]
+that these two edge types provided superior sensor odometry
+on Frieburg RGB-D dataset sequences ([28]) compared to a
+number of alternative features making them good candidates
+for use in SLAM. Additionally using two different types of
+edge features decreases the likelihood of localization being
+lost due to insufficient features being present (there will exist
+scenes in which occluding edges are not present but RGB
+edges are plentiful, and vice versa). This increases both the
+SLAM system’s robustness and the range of environments
+in which it can successfully operate.
+The standard pose graph set-up was used, in which the
+constructed map consists of a set of key-frames K=
+{k0, k1, ..., kN } with estimated poses p0, p1, ..., pN . Each
+of these key-frames contains various features and other
+information. The current pose of the sensor is then tracked
+relative to the map by registering the latest observed features
+against those of the key-frames. For our system specifically
+each key-frame ki = (Oi, Ci, T O
+i ,T C
+i ) consists of a point
+cloud of back-projected occluding edge pixels Oi and second
+cloud of color edge pixels Ci. Additionally each key-frame
+stores two KD-trees T O
+i , T C
+i constructed from these point
+clouds used for point cloud registration.
+
+A. Registration And Sensor Tracking
+An ICP registration process denoted reg(Ct, Cs, Ts, pi)
+is used to estimate the transformation to best align a set of
+N target point clouds Ct = {ct
+0, ...ct
+N }with a set of N
+source point clouds Cs = {cs
+0, ...cs
+N }. The input set of KD-
+trees T s = {ts
+0, ...ts
+N }created from the Cs clouds is used
+to greatly speed up nearest neighbour searches required by
+this process. The input transformation pi provides an initial
+guess for the alignment transformation.
+To track the pose of the sensor relative to the map
+(psensor ), occluding and color edges are extracted from
+each new RGB-D image. The pixels of these edges are
+then back projected to form occluding and color edge point
+clouds Onew and Cnew . The pose of the sensor relative
+to a certain key-frame ki = (Oi, Ci, T O
+i ,T C
+i ) can then be
+estimated by registering the point clouds Onew , Cnew with
+Oi, Ci using reg as shown in Equation 2. The initial guess
+of best registration pose is taken to be prel, the relative pose
+between the sensors current estimated pose psensor and the
+key-frames current pose pi.
+reg({Onew , Cnew }, {Oi, Ci}, {T O
+i , T C
+i }, prel) (2)
+This ICP process uses both occluding and color edges to
+estimate the registration transformation. Naturally at each
+ICP iteration, when determining pairs of associated points
+between the two sets of clouds, occluding edge points are
+only paired with other occluding edge points (and similarly
+for color edge points).
+
+In practise only one key-frame is used for sensor tracking
+at any point in time. Whenever the registration between the
+sensor and the tracking key-frame is not strong enough, other
+key-frames near the sensors current estimated pose are tested
+to see if they provide a stronger registration. If another key-
+frame is found to provide sufficiently strong registration then
+this takes over as the tracking key-frame. Thus the map key-
+frame used for sensor tracking is automatically changed as
+the sensor moves about the world. In the case where no
+key-frame is found to provide sufficient registration, a new
+key-frame is added to the map located at the sensors current
+estimated pose.
+B. Loop Closure Detection And Pose Graph Optimization
+Map optimization and loop closure is performed simulta-
+neously on a separate CPU core to that performing sensor
+tracking. This uses the standard pose graph concept wherein
+relative pose constraints are added between pairs of key-
+frames poses. Each time a new key-frame is added to the
+map, ICP registrations are attempted between this new key-
+frame and each of the previous key-frames. The initial trans-
+formation used for such a registration between a new key-
+frame knew and a previously existing key-frame ki, is taken
+to be prel the relative pose between the current key-frame
+poses pnew and pi. Each of these registrations is evaluated
+and assigned a score based upon the strength of the registra-
+tion (i.e. what proportion of points were paired between the
+edge point clouds of the two key-frames by the ICP) and the
+extent to which the final registration transformation differs
+from the the current relative pose between two key-frames
+prel. This is then to determine if a registration should be
+used to create a new loop closure constraint. Thus strong
+registrations or registrations whose reported transformations
+is similar to prel are used to add new loop closure constraints
+to the pose graph. Conversely weak registrations whose
+reported transformation differs greatly from prel (which are
+likely caused by the ICP converging to an incorrect local
+minima or no overlap existing between the point clouds) are
+rejected as constraints.
+Simultaneously pose graph optimization is performed to
+try and determine the set of poses most compliant with
+the given loop closure constraints. We implemented a mesh
+relaxation based method very similar to that presented by
+Andrew Howard et al. [29] but extended to 6DOF poses to
+conduct this optimization.
+
+VI. RESULTS
+This section presents a sample of results from various
+experiments conducted to evaluate the performance of both
+the edge-detection proposed in Section III and edge based
+SLAM system described in Section V. We use the publicly
+available Freiburg RGB-D datasets [28] to conduct this
+evaluation. These consist of a number of 640 ×480 RGB-D
+video sequences of various environments along with sensor
+ground truth trajectories obtained from motion capture. The
+results were obtained from an Intel i5 CPU, 4GB RAM
+laptop running Ubuntu 14.10.
+
+A. Depth Edge Detection
+We evaluated the occluding depth edge-detection de-
+scribed in Section III-B on a number of datasets and with
+various image patch grid sizes. In each case the total number
+of edge pixels detected across the entire sequence was
+recorded. This total was then compared to the total number of
+edge pixels obtained when using brute force occluding edge
+detection (searching the entirety of each depth image). From
+this comparison the percentage of total edge pixels detected
+(compared to brute force) was calculated. What percentage of
+each depth image examined for edge pixels was also recorded
+in each case.
+A detailed sample of these results is given in Table I
+showing the average computation time of the edge detection
+process, percentage of total edge pixels detected, and what
+percentage of each depth image was examined on average.
+These results are illustrated in the plots of Figure 5. As
+expected the average computation time and percentage of
+depth image examined generally decreases as the image
+patch grid size increases. This is due to the smaller image
+patches flagged for edge-detection more tightly fitting about
+the edges detected in the previous image. This tighter fit-
+ting then results in edge-detection being performed upon a
+smaller percentage of the entire depth image. The down side
+of larger grid sizes however is an increased likelihood of
+edges failing to be re-detected from one image to the next
+due to changes in their locations between images (moving
+them into image patches not flagged for edge detection). This
+issue occurs most often when the sensor is undergoing a rapid
+change in orientation.
+It can be seen however that using an image patch grid size
+such as 32x24 can provide up to a 50% saving in computation
+time while still detecting over 95% of the edge pixel in the
+sequence. The average computation time when using such a
+grid size is also well within the 33ms required to process
+a standard 640 ×480 30hz RGB-D video stream in real-
+time and leaves plenty frame time remaining in which other
+processes can take place.
+Table II shows a comparison between the computation
+times of our proposed occluding edge detection and that
+introduced in [2] across a number of Freiburg sequences.
+The use of prior knowledge to only selectively search certain
+areas of the depth image gives the proposed method a far
+lower computation time compared method conducted by [2]
+which searches the entire image. All results in this section
+were obtained using the parameter value rowcol
+_skip = 1.
+
+This paper presented a fast, easy to implement method
+of occluding depth edge-detection for RGB-D video. The
+method makes uses of knowledge obtained from the previous
+depth image, to determine what areas of the current image
+should be searched. In doing so it is able to ignore large
+sections of the image where depth edges are unlikely to
+occur. Evaluating on public data sets demonstrated that such
+a method can have substantial computational savings over
+searching the entire image. An edge based RGB-D SLAM
+system using the proposed edge detection methods was also
+demonstrated, with similar accuracy and significantly lower
+computation times compared to other state of the art systems.
+
