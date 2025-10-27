@@ -40,13 +40,12 @@ class EdgeDetectorGPU {
 
     private static let occludingEdgeMetalSource = """
     #include <CoreImage/CoreImage.h>
-    using namespace metal;
 
     extern "C" {
         namespace coreimage {
             float4 occludingEdge(sampler src, float ratio) {
                 float d = src.sample(src.coord()).r;
-                if (d == 0.0) { return float4(0.0, 0.0, 0.0, 0.0); }
+                if (d == 0.0) { return float4(0.0); }
 
                 float2 neighbors[] = {
                     float2(1.0, 0.0),
@@ -60,12 +59,12 @@ class EdgeDetectorGPU {
                     if (d_n > 0.0) {
                         float threshold = min(d, d_n) * ratio;
                         if (abs(d - d_n) > threshold && d < d_n) {
-                            return float4(1.0, 1.0, 1.0, 1.0);
+                            return float4(1.0);
                         }
                     }
                 }
 
-                return float4(0.0, 0.0, 0.0, 1.0);
+                return float4(0.0);
             }
         }
     }
@@ -114,12 +113,17 @@ class EdgeDetectorGPU {
             self.ciContext = CIContext()
         }
 
-        // Load and compile the custom kernel from the Metal source string
-        guard let kernels = CIKernel.kernels(withMetalString: EdgeDetectorGPU.occludingEdgeMetalSource),
-              let kernel = kernels.first else {
-            fatalError("❌ Failed to load custom Metal kernel for edge detection.")
+        do {
+            // Load and compile the custom kernel from the Metal source string
+            let kernels = try CIKernel.kernels(withMetalString: EdgeDetectorGPU.occludingEdgeMetalSource)
+            if let kernel = kernels.first {
+                self.occludingEdgeKernel = kernel
+            } else {
+                fatalError("❌ Custom Metal kernel 'occludingEdge' not found.")
+            }
+        } catch {
+            fatalError("❌ Failed to load custom Metal kernel with error: \(error)")
         }
-        self.occludingEdgeKernel = kernel
     }
 
     // MARK: - Edge Detection
