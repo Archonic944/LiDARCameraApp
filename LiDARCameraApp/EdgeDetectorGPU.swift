@@ -41,7 +41,6 @@ class EdgeDetectorGPU {
     var enableThresholding: Bool = true
     var preSmoothingRadius: CGFloat = 0.5
     var downscaleFactor: CGFloat = 0.8
-    var upscaleOutput: Bool = true
 
     // MARK: - Initialization
 
@@ -251,20 +250,6 @@ class EdgeDetectorGPU {
             edgeImage = out
         }
 
-        // Upscale to original
-        if upscaleOutput && downscaleFactor < 1.0 {
-            let currentW = edgeImage.extent.width
-            let targetW = originalExtent.width
-            let scale = targetW / currentW
-            if let up = CIFilter(name: "CILanczosScaleTransform", parameters: [
-                kCIInputImageKey: edgeImage,
-                kCIInputScaleKey: scale,
-                kCIInputAspectRatioKey: 1.0
-            ]), let out = up.outputImage {
-                edgeImage = out
-            }
-        }
-
         return createPixelBuffer(from: edgeImage)
     }
 
@@ -459,67 +444,5 @@ class EdgeDetectorGPU {
         guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return nil }
         ciContext.render(image, to: buffer)
         return buffer
-    }
-
-    // MARK: - Presets
-
-    func resetToDefaults() {
-        edgeDetectionThresholdRatio = 0.05
-        edgeAmplification = 2.5
-        edgeThreshold = 0.1
-        enableThresholding = true
-        preSmoothingRadius = 0.5
-        downscaleFactor = 0.5
-        upscaleOutput = true
-    }
-
-    func applySubtlePreset() {
-        edgeDetectionThresholdRatio = 0.1
-        edgeAmplification = 1.5
-        edgeThreshold = 0.15
-        enableThresholding = true
-        preSmoothingRadius = 1.0
-        downscaleFactor = 0.75
-        upscaleOutput = true
-    }
-
-    func applyStrongPreset() {
-        edgeDetectionThresholdRatio = 0.03
-        edgeAmplification = 3.5
-        edgeThreshold = 0.05
-        enableThresholding = true
-        preSmoothingRadius = 0.5
-        downscaleFactor = 0.5
-        upscaleOutput = true
-    }
-
-    func applyMaximumPreset() {
-        edgeDetectionThresholdRatio = 0.01
-        edgeAmplification = 5.0
-        edgeThreshold = 0.0
-        enableThresholding = false
-        preSmoothingRadius = 0.0
-        downscaleFactor = 0.5
-        upscaleOutput = true
-    }
-
-    func applyCleanPreset() {
-        edgeDetectionThresholdRatio = 0.08
-        edgeAmplification = 2.5
-        edgeThreshold = 0.2
-        enableThresholding = true
-        preSmoothingRadius = 1.5
-        downscaleFactor = 0.5
-        upscaleOutput = true
-    }
-
-    func applyPerformancePreset() {
-        edgeDetectionThresholdRatio = 0.05
-        edgeAmplification = 2.5
-        edgeThreshold = 0.1
-        enableThresholding = true
-        preSmoothingRadius = 0.0
-        downscaleFactor = 0.25
-        upscaleOutput = false
     }
 }
