@@ -115,6 +115,24 @@ class DepthProcessor {
         return orientDepthMap(depthMap, videoOrientation: orientation)
     }
 
+    /// Gets unoriented depth map for edge detection (in native camera orientation)
+    /// - Parameter depthData: Raw depth data from camera
+    /// - Returns: Unoriented depth map in meters as CVPixelBuffer (Float32)
+    func getUnorientedDepthMap(_ depthData: AVDepthData) -> CVPixelBuffer {
+        // Convert to 32-bit floating-point depth format but don't orient
+        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        return convertedDepth.depthDataMap
+    }
+
+    /// Orients an edge map to match screen orientation
+    /// - Parameters:
+    ///   - edgeMap: Unoriented edge map from EdgeDetectorGPU
+    ///   - orientation: Current device/video orientation
+    /// - Returns: Oriented edge map
+    func orientEdgeMap(_ edgeMap: CVPixelBuffer, orientation: AVCaptureVideoOrientation) -> CVPixelBuffer {
+        return orientDepthMap(edgeMap, videoOrientation: orientation, mirrorX: false, mirrorY: true);
+    }
+
     /// Calibrates the depth range to fit the current frame using statistical analysis
     /// - Parameter depthData: Raw depth data from camera
     /// - Note: Uses 5th and 95th percentiles to eliminate outliers
@@ -254,7 +272,7 @@ class DepthProcessor {
 
     /// Orients depth map to match screen coordinates
     /// All downstream processing uses correctly oriented data
-    private func orientDepthMap(_ depthMap: CVPixelBuffer, videoOrientation: AVCaptureVideoOrientation) -> CVPixelBuffer {
+    private func orientDepthMap(_ depthMap: CVPixelBuffer, videoOrientation: AVCaptureVideoOrientation, mirrorX: Bool = false, mirrorY: Bool = false) -> CVPixelBuffer {
         let ciImage = CIImage(cvPixelBuffer: depthMap)
 
         // Map video orientation to CGImagePropertyOrientation
@@ -275,10 +293,26 @@ class DepthProcessor {
         // Apply orientation and normalize to origin
         var orientedImage = ciImage.oriented(orientation)
         let orientedExtent = orientedImage.extent
-        orientedImage = orientedImage.transformed(
-            by: CGAffineTransform(translationX: -orientedExtent.origin.x,
-                                 y: -orientedExtent.origin.y)
+        let a = mirrorX ? -1.0 : 1.0
+        let d = mirrorY ? -1.0 : 1.0
+
+        let tx = mirrorX
+            ? orientedExtent.origin.x + orientedExtent.width
+            : -orientedExtent.origin.x
+
+        let ty = mirrorY
+            ? orientedExtent.origin.y + orientedExtent.height
+            : -orientedExtent.origin.y
+
+        let transform = CGAffineTransform(
+            a: a,
+            b: 0,
+            c: 0,
+            d: d,
+            tx: tx,
+            ty: ty
         )
+        orientedImage = orientedImage.transformed(by:transform)
 
         // Render back to CVPixelBuffer
         let width = Int(orientedImage.extent.width)
