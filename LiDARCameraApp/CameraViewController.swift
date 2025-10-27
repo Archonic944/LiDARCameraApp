@@ -82,6 +82,7 @@ class CameraViewController: UIViewController {
         previewLayer?.frame = view.bounds
         depthPreviewView?.frame = view.bounds
         edgePreviewView?.frame = view.bounds
+        gestureManager?.updateEdgeIndicatorFrames()
     }
 
     // MARK: - Setup
@@ -366,6 +367,28 @@ class CameraViewController: UIViewController {
         settings.isDepthDataDeliveryEnabled = true
         settings.embedsDepthDataInPhoto = true
         photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+
+    // MARK: - Touch Handling
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        gestureManager?.updateTouchState(touches: touches, in: view)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesMoved(touches, with: event)
+        gestureManager?.updateTouchState(touches: touches, in: view)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        gestureManager?.clearTouchState()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        gestureManager?.clearTouchState()
     }
 }
 
