@@ -67,7 +67,7 @@ class DepthVisualizer {
 
     /// Converts an edge map to a colorized CGImage with custom colors
     /// - Parameters:
-    ///   - edgeMap: Normalized edge strength pixel buffer (0-1) (already oriented - matches depth map)
+    ///   - edgeMap: Normalized edge strength pixel buffer (0-1) (already oriented by DepthProcessor)
     ///   - orientation: Device orientation (kept for API compatibility but not used - orientation handled in DepthProcessor)
     ///   - targetSize: Size to scale the output to
     /// - Returns: Rendered CGImage of the edge overlay
@@ -75,7 +75,7 @@ class DepthVisualizer {
                        orientation: AVCaptureVideoOrientation,
                        targetSize: CGSize) -> CGImage? {
 
-        // Create CIImage from edge map (already correctly oriented - matches depth map)
+        // Create CIImage from edge map (already correctly oriented by DepthProcessor)
         var ciEdge = CIImage(cvPixelBuffer: edgeMap)
 
         // Apply edge color mapping (transparent -> bright green)
@@ -84,8 +84,8 @@ class DepthVisualizer {
             "inputColor1": CIColor(red: 0, green: 1, blue: 0, alpha: 1)       // 1 = bright green
         ])
 
-        // NOTE: Orientation already applied in DepthProcessor to source depth map
-        // Edge detection works on correctly oriented data, so edges are also correctly oriented
+        // NOTE: Orientation already applied in DepthProcessor to edge map
+        // Edge map is correctly oriented to match depth map and screen
 
         // Scale and crop to target size
         ciEdge = scaleAndCrop(image: ciEdge, to: targetSize)

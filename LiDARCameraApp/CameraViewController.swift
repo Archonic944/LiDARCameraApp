@@ -408,7 +408,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Process depth data and orient it to match screen coordinates
         let processedDepthMap = depthProcessor.processDepthData(depthData, orientation: videoOrientation)
 
-        // GPU-accelerated edge detection (RGB + Depth fusion)
+        // GPU-accelerated edge detection (works on unoriented depth for consistency)
         edgeFrameCounter += 1
         if edgeFrameCounter >= edgeFrameSkip {
             edgeFrameCounter = 0
@@ -419,32 +419,39 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
 
                 let startTime = Date()
 
+                // Get unoriented depth map for edge detection (native camera orientation)
+                let unorientedDepthMap = self.depthProcessor.getUnorientedDepthMap(depthData)
+
                 // Detect edges using GPU (in native orientation - no rotation overhead)
-                let edgeMap = self.edgeDetectorGPU.detectEdges(
+                let unorientedEdgeMap = self.edgeDetectorGPU.detectEdges(
                     rgbImage: self.latestRGBImage,
-                    depthMap: processedDepthMap
+                    depthMap: unorientedDepthMap
                 )
 
                 let elapsed = Date().timeIntervalSince(startTime)
                 print("⏱️ GPU edge detection took \(String(format: "%.1f", elapsed * 1000))ms")
 
-                // Update cached edge map
-                self.latestEdgeMap = edgeMap
+                // Orient the edge map to match screen orientation (same as depth map)
+                guard let unorientedEdges = unorientedEdgeMap,
+                      let videoOrientation = self.previewLayer.connection?.videoOrientation else {
+                    return
+                }
+
+                let orientedEdgeMap = self.depthProcessor.orientEdgeMap(unorientedEdges, orientation: videoOrientation)
+
+                // Update cached edge map (now correctly oriented)
+                self.latestEdgeMap = orientedEdgeMap
 
                 // Visualize edges and update UI
-                if let edgeMap = edgeMap,
-                   let videoOrientation = self.previewLayer.connection?.videoOrientation {
-                    let viewSize = UIScreen.main.bounds.size
-
-                    if let edgeImage = self.depthVisualizer.visualizeEdges(
-                        edgeMap: edgeMap,
-                        orientation: videoOrientation,
-                        targetSize: viewSize
-                    ) {
-                        print("✅ GPU edge image created")
-                        Task { @MainActor in
-                            self.edgePreviewView.image = UIImage(cgImage: edgeImage)
-                        }
+                let viewSize = UIScreen.main.bounds.size
+                if let edgeImage = self.depthVisualizer.visualizeEdges(
+                    edgeMap: orientedEdgeMap,
+                    orientation: videoOrientation,
+                    targetSize: viewSize
+                ) {
+                    print("✅ GPU edge image created")
+                    Task { @MainActor in
+                        self.edgePreviewView.image = UIImage(cgImage: edgeImage)
                     }
                 }
             }
