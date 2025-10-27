@@ -12,7 +12,6 @@
 //
 //  This GPU implementation uses Metal compute kernels for row and column
 //  scans, eliminating CPU readbacks and achieving real-time performance.
-//
 
 import Foundation
 import CoreImage
@@ -29,7 +28,10 @@ class EdgeDetectorGPU {
     private let metalCommandQueue: MTLCommandQueue?
     private var rowPipeline: MTLComputePipelineState?
     private var colPipeline: MTLComputePipelineState?
+    private var combinePipeline: MTLComputePipelineState?
+    private var clearPipeline: MTLComputePipelineState?
     private var textureCache: CVMetalTextureCache?
+    private var supportsNonUniformThreadgroups: Bool = false
 
     // MARK: - Customizable Parameters
 
@@ -48,6 +50,12 @@ class EdgeDetectorGPU {
             self.metalDevice = dev
             self.metalCommandQueue = dev.makeCommandQueue()
             self.ciContext = CIContext(mtlDevice: dev)
+            
+            // Check for non-uniform threadgroup support
+            if #available(iOS 11.0, macOS 10.13, *) {
+                self.supportsNonUniformThreadgroups = dev.supportsFamily(.apple4) ||
+                                                       dev.supportsFamily(.mac2)
+            }
         } else {
             self.metalDevice = nil
             self.metalCommandQueue = nil
@@ -59,9 +67,13 @@ class EdgeDetectorGPU {
             do {
                 let lib = try dev.makeLibrary(source: EdgeDetectorGPU.occludingEdgeComputeSource, options: nil)
                 if let rowFunc = lib.makeFunction(name: "rowScan"),
-                   let colFunc = lib.makeFunction(name: "colScan") {
+                   let colFunc = lib.makeFunction(name: "colScan"),
+                   let combineFunc = lib.makeFunction(name: "combineMasks"),
+                   let clearFunc = lib.makeFunction(name: "clearTexture") {
                     self.rowPipeline = try dev.makeComputePipelineState(function: rowFunc)
                     self.colPipeline = try dev.makeComputePipelineState(function: colFunc)
+                    self.combinePipeline = try dev.makeComputePipelineState(function: combineFunc)
+                    self.clearPipeline = try dev.makeComputePipelineState(function: clearFunc)
                 }
             } catch {
                 print("⚠️ Failed to compile Metal kernels: \(error)")
@@ -79,10 +91,22 @@ class EdgeDetectorGPU {
     #include <metal_stdlib>
     using namespace metal;
 
+    // Clear texture kernel - GPU-based clearing
+    kernel void clearTexture(
+        texture2d<float, access::write> tex [[texture(0)]],
+        uint2 gid [[thread_position_in_grid]]
+    ) {
+        uint width = tex.get_width();
+        uint height = tex.get_height();
+        if (gid.x >= width || gid.y >= height) return;
+        tex.write(float4(0.0), gid);
+    }
+
     // Row-scan kernel: each thread scans one row
+    // Writes to separate output texture to avoid race conditions
     kernel void rowScan(
         texture2d<float, access::read> depthTex [[texture(0)]],
-        texture2d<float, access::read_write> maskTex [[texture(1)]],
+        texture2d<float, access::write> rowMaskTex [[texture(1)]],
         constant float &ratio [[buffer(0)]],
         uint row [[thread_position_in_grid]]
     ) {
@@ -99,9 +123,9 @@ class EdgeDetectorGPU {
                 if (lastX >= 0) {
                     float thresh = min(d, lastV) * ratio;
                     if ((lastV - d) > thresh) {
-                        maskTex.write(float4(1.0), uint2(x, row));
+                        rowMaskTex.write(float4(1.0), uint2(x, row));
                     } else if ((d - lastV) > thresh) {
-                        maskTex.write(float4(1.0), uint2(lastX, row));
+                        rowMaskTex.write(float4(1.0), uint2(lastX, row));
                     }
                 }
                 lastX = int(x);
@@ -111,9 +135,10 @@ class EdgeDetectorGPU {
     }
 
     // Column-scan kernel: each thread scans one column
+    // Writes to separate output texture to avoid race conditions
     kernel void colScan(
         texture2d<float, access::read> depthTex [[texture(0)]],
-        texture2d<float, access::read_write> maskTex [[texture(1)]],
+        texture2d<float, access::write> colMaskTex [[texture(1)]],
         constant float &ratio [[buffer(0)]],
         uint col [[thread_position_in_grid]]
     ) {
@@ -130,15 +155,34 @@ class EdgeDetectorGPU {
                 if (lastY >= 0) {
                     float thresh = min(d, lastV) * ratio;
                     if ((lastV - d) > thresh) {
-                        maskTex.write(float4(1.0), uint2(col, y));
+                        colMaskTex.write(float4(1.0), uint2(col, y));
                     } else if ((d - lastV) > thresh) {
-                        maskTex.write(float4(1.0), uint2(col, lastY));
+                        colMaskTex.write(float4(1.0), uint2(col, lastY));
                     }
                 }
                 lastY = int(y);
                 lastV = d;
             }
         }
+    }
+
+    // Combine row and column masks into final output
+    kernel void combineMasks(
+        texture2d<float, access::read> rowMaskTex [[texture(0)]],
+        texture2d<float, access::read> colMaskTex [[texture(1)]],
+        texture2d<float, access::write> outputTex [[texture(2)]],
+        uint2 gid [[thread_position_in_grid]]
+    ) {
+        uint width = outputTex.get_width();
+        uint height = outputTex.get_height();
+        if (gid.x >= width || gid.y >= height) return;
+
+        float rowEdge = rowMaskTex.read(gid).r;
+        float colEdge = colMaskTex.read(gid).r;
+        
+        // Combine edges with max operation
+        float combinedEdge = max(rowEdge, colEdge);
+        outputTex.write(float4(combinedEdge), gid);
     }
     """
 
@@ -231,14 +275,16 @@ class EdgeDetectorGPU {
               let queue = metalCommandQueue,
               let cache = textureCache,
               let rowPipe = rowPipeline,
-              let colPipe = colPipeline else {
+              let colPipe = colPipeline,
+              let combinePipe = combinePipeline,
+              let clearPipe = clearPipeline else {
             return nil
         }
 
         let width = Int(depthCIImage.extent.width)
         let height = Int(depthCIImage.extent.height)
 
-        // Create source & mask textures
+        // Create source texture
         var srcPixelBuffer: CVPixelBuffer?
         let options: CFDictionary = [
             kCVPixelBufferMetalCompatibilityKey: true,
@@ -258,57 +304,143 @@ class EdgeDetectorGPU {
         cmdBuf?.commit()
         cmdBuf?.waitUntilCompleted()
 
-        // Create mask texture (BGRA for CI compatibility)
-        var maskPB: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &maskPB)
-        guard let maskPixelBuffer = maskPB else { return nil }
+        // Create row mask texture (RGBA for better compatibility)
+        var rowMaskPB: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &rowMaskPB)
+        guard let rowMaskPixelBuffer = rowMaskPB else { return nil }
 
-        var maskTexRef: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, maskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &maskTexRef)
-        guard let maskTexture = maskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+        var rowMaskTexRef: CVMetalTexture?
+        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, rowMaskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &rowMaskTexRef)
+        guard let rowMaskTexture = rowMaskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
 
-        // Clear mask
-        let zero = MTLRegionMake2D(0, 0, width, height)
-        var rowZeros = [UInt8](repeating: 0, count: width * 4)
-        for y in 0..<height {
-            maskTexture.replace(region: MTLRegionMake2D(0, y, width, 1), mipmapLevel: 0, withBytes: rowZeros, bytesPerRow: width * 4)
+        // Create column mask texture (RGBA for better compatibility)
+        var colMaskPB: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &colMaskPB)
+        guard let colMaskPixelBuffer = colMaskPB else { return nil }
+
+        var colMaskTexRef: CVMetalTexture?
+        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, colMaskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &colMaskTexRef)
+        guard let colMaskTexture = colMaskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+
+        // Create output mask texture
+        var outputMaskPB: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &outputMaskPB)
+        guard let outputMaskPixelBuffer = outputMaskPB else { return nil }
+
+        var outputMaskTexRef: CVMetalTexture?
+        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, outputMaskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &outputMaskTexRef)
+        guard let outputMaskTexture = outputMaskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+
+        // Clear row mask texture using GPU
+        guard let clearRowCmd = queue.makeCommandBuffer(),
+              let clearRowEncoder = clearRowCmd.makeComputeCommandEncoder() else { return nil }
+        
+        clearRowEncoder.setComputePipelineState(clearPipe)
+        clearRowEncoder.setTexture(rowMaskTexture, index: 0)
+        
+        let clearThreadsPerGrid = MTLSize(width: width, height: height, depth: 1)
+        let clearThreadExecutionWidth = clearPipe.threadExecutionWidth
+        let clearThreadsPerGroup = MTLSize(width: clearThreadExecutionWidth, height: 1, depth: 1)
+        
+        if supportsNonUniformThreadgroups {
+            clearRowEncoder.dispatchThreads(clearThreadsPerGrid, threadsPerThreadgroup: clearThreadsPerGroup)
+        } else {
+            let groupsW = (width + clearThreadExecutionWidth - 1) / clearThreadExecutionWidth
+            let groupsH = height
+            clearRowEncoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: 1),
+                                                 threadsPerThreadgroup: clearThreadsPerGroup)
         }
+        clearRowEncoder.endEncoding()
+        clearRowCmd.commit()
+        clearRowCmd.waitUntilCompleted()
+
+        // Clear column mask texture using GPU
+        guard let clearColCmd = queue.makeCommandBuffer(),
+              let clearColEncoder = clearColCmd.makeComputeCommandEncoder() else { return nil }
+        
+        clearColEncoder.setComputePipelineState(clearPipe)
+        clearColEncoder.setTexture(colMaskTexture, index: 0)
+        clearColEncoder.dispatchThreads(clearThreadsPerGrid, threadsPerThreadgroup: clearThreadsPerGroup)
+        clearColEncoder.endEncoding()
+        clearColCmd.commit()
+        clearColCmd.waitUntilCompleted()
 
         // Dispatch row scan
         guard let rowCmd = queue.makeCommandBuffer(),
-              let encoder = rowCmd.makeComputeCommandEncoder() else { return nil }
+              let rowEncoder = rowCmd.makeComputeCommandEncoder() else { return nil }
 
-        encoder.setComputePipelineState(rowPipe)
-        encoder.setTexture(srcTexture, index: 0)
-        encoder.setTexture(maskTexture, index: 1)
+        rowEncoder.setComputePipelineState(rowPipe)
+        rowEncoder.setTexture(srcTexture, index: 0)
+        rowEncoder.setTexture(rowMaskTexture, index: 1)
         var ratioVar = ratio
-        encoder.setBytes(&ratioVar, length: MemoryLayout<Float>.size, index: 0)
+        rowEncoder.setBytes(&ratioVar, length: MemoryLayout<Float>.size, index: 0)
 
-        let threadsPerGrid = MTLSize(width: height, height: 1, depth: 1)
-        let threadsPerGroup = MTLSize(width: min(rowPipe.maxTotalThreadsPerThreadgroup, height), height: 1, depth: 1)
-        encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
-        encoder.endEncoding()
+        let rowThreadExecutionWidth = rowPipe.threadExecutionWidth
+        let rowThreadsPerGrid = MTLSize(width: height, height: 1, depth: 1)
+        let rowThreadsPerGroup = MTLSize(width: min(rowThreadExecutionWidth, height), height: 1, depth: 1)
+        
+        if supportsNonUniformThreadgroups {
+            rowEncoder.dispatchThreads(rowThreadsPerGrid, threadsPerThreadgroup: rowThreadsPerGroup)
+        } else {
+            let numGroups = (height + rowThreadsPerGroup.width - 1) / rowThreadsPerGroup.width
+            rowEncoder.dispatchThreadgroups(MTLSize(width: numGroups, height: 1, depth: 1),
+                                           threadsPerThreadgroup: rowThreadsPerGroup)
+        }
+        rowEncoder.endEncoding()
         rowCmd.commit()
         rowCmd.waitUntilCompleted()
 
         // Dispatch column scan
         guard let colCmd = queue.makeCommandBuffer(),
-              let encoder2 = colCmd.makeComputeCommandEncoder() else { return nil }
+              let colEncoder = colCmd.makeComputeCommandEncoder() else { return nil }
 
-        encoder2.setComputePipelineState(colPipe)
-        encoder2.setTexture(srcTexture, index: 0)
-        encoder2.setTexture(maskTexture, index: 1)
-        encoder2.setBytes(&ratioVar, length: MemoryLayout<Float>.size, index: 0)
+        colEncoder.setComputePipelineState(colPipe)
+        colEncoder.setTexture(srcTexture, index: 0)
+        colEncoder.setTexture(colMaskTexture, index: 1)
+        colEncoder.setBytes(&ratioVar, length: MemoryLayout<Float>.size, index: 0)
 
-        let threadsPerGrid2 = MTLSize(width: width, height: 1, depth: 1)
-        let threadsPerGroup2 = MTLSize(width: min(colPipe.maxTotalThreadsPerThreadgroup, width), height: 1, depth: 1)
-        encoder2.dispatchThreads(threadsPerGrid2, threadsPerThreadgroup: threadsPerGroup2)
-        encoder2.endEncoding()
+        let colThreadExecutionWidth = colPipe.threadExecutionWidth
+        let colThreadsPerGrid = MTLSize(width: width, height: 1, depth: 1)
+        let colThreadsPerGroup = MTLSize(width: min(colThreadExecutionWidth, width), height: 1, depth: 1)
+        
+        if supportsNonUniformThreadgroups {
+            colEncoder.dispatchThreads(colThreadsPerGrid, threadsPerThreadgroup: colThreadsPerGroup)
+        } else {
+            let numGroups = (width + colThreadsPerGroup.width - 1) / colThreadsPerGroup.width
+            colEncoder.dispatchThreadgroups(MTLSize(width: numGroups, height: 1, depth: 1),
+                                           threadsPerThreadgroup: colThreadsPerGroup)
+        }
+        colEncoder.endEncoding()
         colCmd.commit()
         colCmd.waitUntilCompleted()
 
-        // Return CIImage from mask
-        return CIImage(cvPixelBuffer: maskPixelBuffer)
+        // Combine row and column masks
+        guard let combineCmd = queue.makeCommandBuffer(),
+              let combineEncoder = combineCmd.makeComputeCommandEncoder() else { return nil }
+
+        combineEncoder.setComputePipelineState(combinePipe)
+        combineEncoder.setTexture(rowMaskTexture, index: 0)
+        combineEncoder.setTexture(colMaskTexture, index: 1)
+        combineEncoder.setTexture(outputMaskTexture, index: 2)
+
+        let combineThreadsPerGrid = MTLSize(width: width, height: height, depth: 1)
+        let combineThreadExecutionWidth = combinePipe.threadExecutionWidth
+        let combineThreadsPerGroup = MTLSize(width: combineThreadExecutionWidth, height: 1, depth: 1)
+        
+        if supportsNonUniformThreadgroups {
+            combineEncoder.dispatchThreads(combineThreadsPerGrid, threadsPerThreadgroup: combineThreadsPerGroup)
+        } else {
+            let groupsW = (width + combineThreadExecutionWidth - 1) / combineThreadExecutionWidth
+            let groupsH = height
+            combineEncoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: 1),
+                                               threadsPerThreadgroup: combineThreadsPerGroup)
+        }
+        combineEncoder.endEncoding()
+        combineCmd.commit()
+        combineCmd.waitUntilCompleted()
+
+        // Return CIImage from combined mask
+        return CIImage(cvPixelBuffer: outputMaskPixelBuffer)
     }
 
     // MARK: - Helper
