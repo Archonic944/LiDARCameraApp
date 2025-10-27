@@ -33,8 +33,8 @@ class DepthVisualizer {
 
     /// Converts a depth map to a colorized CGImage
     /// - Parameters:
-    ///   - depthMap: Depth pixel buffer in METERS
-    ///   - orientation: Device orientation for proper rotation
+    ///   - depthMap: Depth pixel buffer in METERS (already oriented by DepthProcessor)
+    ///   - orientation: Device orientation (kept for API compatibility but not used - orientation handled in DepthProcessor)
     ///   - targetSize: Size to scale the output to
     ///   - minDepth: Minimum depth in meters (for proximity conversion)
     ///   - maxDepth: Maximum depth in meters (for proximity conversion)
@@ -50,14 +50,13 @@ class DepthVisualizer {
             return nil
         }
 
-        // Create CIImage from proximity map
+        // Create CIImage from proximity map (already correctly oriented)
         var ciDepth = CIImage(cvPixelBuffer: proximityMap)
 
         // Apply false color mapping
         ciDepth = applyFalseColor(to: ciDepth)
 
-        // Apply orientation transform
-        ciDepth = applyOrientation(to: ciDepth, videoOrientation: orientation)
+        // NOTE: Orientation already applied in DepthProcessor - depthMap[row][col] matches screen (col, row)
 
         // Scale and crop to target size
         ciDepth = scaleAndCrop(image: ciDepth, to: targetSize)
@@ -68,15 +67,15 @@ class DepthVisualizer {
 
     /// Converts an edge map to a colorized CGImage with custom colors
     /// - Parameters:
-    ///   - edgeMap: Normalized edge strength pixel buffer (0-1)
-    ///   - orientation: Device orientation for proper rotation
+    ///   - edgeMap: Normalized edge strength pixel buffer (0-1) (already oriented - matches depth map)
+    ///   - orientation: Device orientation (kept for API compatibility but not used - orientation handled in DepthProcessor)
     ///   - targetSize: Size to scale the output to
     /// - Returns: Rendered CGImage of the edge overlay
     func visualizeEdges(edgeMap: CVPixelBuffer,
                        orientation: AVCaptureVideoOrientation,
                        targetSize: CGSize) -> CGImage? {
 
-        // Create CIImage from edge map
+        // Create CIImage from edge map (already correctly oriented - matches depth map)
         var ciEdge = CIImage(cvPixelBuffer: edgeMap)
 
         // Apply edge color mapping (transparent -> bright green)
@@ -85,8 +84,8 @@ class DepthVisualizer {
             "inputColor1": CIColor(red: 0, green: 1, blue: 0, alpha: 1)       // 1 = bright green
         ])
 
-        // Apply orientation transform
-        ciEdge = applyOrientation(to: ciEdge, videoOrientation: orientation)
+        // NOTE: Orientation already applied in DepthProcessor to source depth map
+        // Edge detection works on correctly oriented data, so edges are also correctly oriented
 
         // Scale and crop to target size
         ciEdge = scaleAndCrop(image: ciEdge, to: targetSize)
@@ -103,36 +102,6 @@ class DepthVisualizer {
             "inputColor0": farColor,   // Low values (far) = blue
             "inputColor1": nearColor   // High values (near) = red
         ])
-    }
-
-    /// Applies orientation transform to match device orientation
-    private func applyOrientation(to image: CIImage,
-                                 videoOrientation: AVCaptureVideoOrientation) -> CIImage {
-
-        // Map video orientation to CGImagePropertyOrientation
-        let orientation: CGImagePropertyOrientation
-        switch videoOrientation {
-        case .portrait:
-            orientation = .up
-        case .portraitUpsideDown:
-            orientation = .down
-        case .landscapeRight:
-            orientation = .right
-        case .landscapeLeft:
-            orientation = .left
-        @unknown default:
-            orientation = .up
-        }
-
-        // Apply orientation and normalize to origin
-        var orientedImage = image.oriented(orientation)
-        let orientedExtent = orientedImage.extent
-        orientedImage = orientedImage.transformed(
-            by: CGAffineTransform(translationX: -orientedExtent.origin.x,
-                                 y: -orientedExtent.origin.y)
-        )
-
-        return orientedImage
     }
 
     /// Scales and crops image to target size using aspect fill

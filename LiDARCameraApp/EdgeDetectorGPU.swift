@@ -3,7 +3,7 @@
 //  LiDARCameraApp
 //
 //  GPU-accelerated occluding-edge detection using LiDAR depth data
-//  Implements Bose et al. (2017), "Fast RGB-D Edge Detection for SLAM"
+//  Implements Bose et al. (2017), "Fast RGB-D Edge Detection for SLAM" Algorithm 1
 //
 //  The algorithm scans each row and column of the depth map to find
 //  occluding edges: pixels where the depth difference to the last valid
@@ -40,7 +40,7 @@ class EdgeDetectorGPU {
     var edgeThreshold: CGFloat = 0.1
     var enableThresholding: Bool = true
     var preSmoothingRadius: CGFloat = 0.5
-    var downscaleFactor: CGFloat = 0.5
+    var downscaleFactor: CGFloat = 0.8
     var upscaleOutput: Bool = true
 
     // MARK: - Initialization
