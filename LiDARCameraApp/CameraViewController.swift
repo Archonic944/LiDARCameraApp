@@ -402,8 +402,11 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Cache latest depth data for tap-to-calibrate
         latestDepthData = depthData
 
-        // Process depth data
-        let processedDepthMap = depthProcessor.processDepthData(depthData)
+        // Get current orientation
+        guard let videoOrientation = previewLayer.connection?.videoOrientation else { return }
+
+        // Process depth data and orient it to match screen coordinates
+        let processedDepthMap = depthProcessor.processDepthData(depthData, orientation: videoOrientation)
 
         // GPU-accelerated edge detection (RGB + Depth fusion)
         edgeFrameCounter += 1
@@ -416,7 +419,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
 
                 let startTime = Date()
 
-                // Detect edges using GPU (combines RGB + depth)
+                // Detect edges using GPU (in native orientation - no rotation overhead)
                 let edgeMap = self.edgeDetectorGPU.detectEdges(
                     rgbImage: self.latestRGBImage,
                     depthMap: processedDepthMap

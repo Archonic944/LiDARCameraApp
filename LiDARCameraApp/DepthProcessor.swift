@@ -95,18 +95,24 @@ class DepthProcessor {
     /// Maximum depth value in meters (farthest distance in range)
     var maxDisparity: Float = DepthProcessor.defaultMaxDepth
 
+    /// Reusable Core Image context for orientation operations
+    private let ciContext = CIContext()
+
     // MARK: - Public Methods
 
-    /// Converts depth data to meters format (preserves raw meter values)
-    /// - Parameter depthData: Raw depth data from camera
-    /// - Returns: Depth map in meters as CVPixelBuffer (Float32)
-    func processDepthData(_ depthData: AVDepthData) -> CVPixelBuffer {
-        // Convert to 32-bit floating-point depth format (METERS, not disparity!)
+    /// Converts depth data to meters format and orients it to match screen orientation
+    /// - Parameters:
+    ///   - depthData: Raw depth data from camera
+    ///   - orientation: Current device/video orientation
+    /// - Returns: Oriented depth map in meters as CVPixelBuffer (Float32)
+    func processDepthData(_ depthData: AVDepthData, orientation: AVCaptureVideoOrientation) -> CVPixelBuffer {
+        // Convert to 32-bit floating-point depth format
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         let depthMap = convertedDepth.depthDataMap
 
-        // Return raw meter values - don't modify!
-        return depthMap
+        // Orient the depth map to match screen coordinates
+        // depthMap[row][col] corresponds to screen position (col, row)
+        return orientDepthMap(depthMap, videoOrientation: orientation)
     }
 
     /// Calibrates the depth range to fit the current frame using statistical analysis
@@ -242,5 +248,57 @@ class DepthProcessor {
         let normalized = (meters - minDisparity) / range
         let clamped = max(0.0, min(1.0, normalized))
         return 1.0 - clamped  // Invert: close = high proximity
+    }
+
+    // MARK: - Private Methods
+
+    /// Orients depth map to match screen coordinates
+    /// All downstream processing uses correctly oriented data
+    private func orientDepthMap(_ depthMap: CVPixelBuffer, videoOrientation: AVCaptureVideoOrientation) -> CVPixelBuffer {
+        let ciImage = CIImage(cvPixelBuffer: depthMap)
+
+        // Map video orientation to CGImagePropertyOrientation
+        let orientation: CGImagePropertyOrientation
+        switch videoOrientation {
+        case .portrait:
+            orientation = .up
+        case .portraitUpsideDown:
+            orientation = .down
+        case .landscapeRight:
+            orientation = .right
+        case .landscapeLeft:
+            orientation = .left
+        @unknown default:
+            orientation = .up
+        }
+
+        // Apply orientation and normalize to origin
+        var orientedImage = ciImage.oriented(orientation)
+        let orientedExtent = orientedImage.extent
+        orientedImage = orientedImage.transformed(
+            by: CGAffineTransform(translationX: -orientedExtent.origin.x,
+                                 y: -orientedExtent.origin.y)
+        )
+
+        // Render back to CVPixelBuffer
+        let width = Int(orientedImage.extent.width)
+        let height = Int(orientedImage.extent.height)
+
+        var orientedBuffer: CVPixelBuffer?
+        CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_DepthFloat32,
+            nil,
+            &orientedBuffer
+        )
+
+        guard let outputBuffer = orientedBuffer else {
+            return depthMap  // Fallback to unoriented if creation fails
+        }
+
+        ciContext.render(orientedImage, to: outputBuffer)
+        return outputBuffer
     }
 }
