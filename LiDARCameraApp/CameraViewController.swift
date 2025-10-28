@@ -403,7 +403,8 @@ extension CameraViewController: GestureManagerDelegate {
         }
 
         // Calibrate depth range to current scene (tap location is irrelevant)
-        depthProcessor.calibrateToCurrentFrame(from: depthData)
+        // TODO Commented for now due to poor functionality and conflicting with other gestures
+        // depthProcessor.calibrateToCurrentFrame(from: depthData)
     }
 
     func gestureManagerDidDoubleTap(_ manager: GestureManager) {
