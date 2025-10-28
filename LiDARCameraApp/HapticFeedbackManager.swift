@@ -176,8 +176,8 @@ class HapticFeedbackManager {
                 value: clampedIntensity,
                 relativeTime: 0
             )
-            
-            
+
+
 
             do {
                 try player.sendParameters([intensityParameter], atTime: 0)
@@ -186,6 +186,42 @@ class HapticFeedbackManager {
             }
         }
         // Fallback generator updates happen automatically via timer
+    }
+
+    /// Fires a single transient haptic pulse (for edge alerts)
+    /// - Parameters:
+    ///   - intensity: Haptic intensity (0.0-1.0)
+    ///   - sharpness: Haptic sharpness (0.0-1.0)
+    func fireTransientPulse(intensity: Float = 1.0, sharpness: Float = 1.0) {
+        guard let engine = hapticEngine else {
+            print("⚠️ Cannot fire pulse - haptic engine not available")
+            return
+        }
+
+        print("💥 Firing transient pulse (intensity: \(intensity), sharpness: \(sharpness))")
+
+        do {
+            // Create sharp transient event
+            let intensityParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity)
+            let sharpnessParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
+
+            let event = CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [intensityParam, sharpnessParam],
+                relativeTime: 0
+            )
+
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+
+            // Start immediately and let player auto-deallocate
+            try player.start(atTime: CHHapticTimeImmediate)
+
+            print("💥 Transient pulse fired successfully")
+
+        } catch {
+            print("❌ Failed to fire transient pulse: \(error)")
+        }
     }
 
     // MARK: - Private Methods

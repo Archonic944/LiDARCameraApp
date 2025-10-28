@@ -38,7 +38,7 @@ class CameraViewController: UIViewController {
 
     // Haptic feedback
     private let hapticManager = HapticFeedbackManager()
-    private let edgeAlertManager = EdgeAlertManager()
+    private lazy var edgeAlertManager = EdgeAlertManager(hapticManager: hapticManager)
 
     // Gesture management
     private var gestureManager: GestureManager!

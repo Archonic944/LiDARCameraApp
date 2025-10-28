@@ -6,7 +6,6 @@
 //  Scans edge map for edges approaching from held screen edges
 //
 
-import CoreHaptics
 import CoreVideo
 import Foundation
 
@@ -23,7 +22,7 @@ class EdgeAlertManager {
 
     // MARK: - Properties
 
-    private var hapticEngine: CHHapticEngine?
+    private weak var hapticManager: HapticFeedbackManager?
     private var pulseTimer: Timer?
     private var lastEdgeDistance: CGFloat?
     private var activeDirection: HoldDirection?
@@ -61,45 +60,14 @@ class EdgeAlertManager {
 
     // MARK: - Initialization
 
-    init() {
-        setupHapticEngine()
+    init(hapticManager: HapticFeedbackManager) {
+        self.hapticManager = hapticManager
+        print("🎯 EdgeAlertManager initialized")
     }
 
     deinit {
         stopPulses()
-        hapticEngine?.stop()
-    }
-
-    // MARK: - Haptic Engine Setup
-
-    private func setupHapticEngine() {
-        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
-            print("EdgeAlertManager: Device does not support haptics")
-            return
-        }
-
-        do {
-            hapticEngine = try CHHapticEngine()
-            try hapticEngine?.start()
-
-            // Handle engine reset (e.g., after phone call)
-            hapticEngine?.resetHandler = { [weak self] in
-                print("EdgeAlertManager: Haptic engine reset")
-                do {
-                    try self?.hapticEngine?.start()
-                } catch {
-                    print("EdgeAlertManager: Failed to restart haptic engine: \(error)")
-                }
-            }
-
-            // Handle engine stopped (e.g., app backgrounded)
-            hapticEngine?.stoppedHandler = { reason in
-                print("EdgeAlertManager: Haptic engine stopped: \(reason)")
-            }
-
-        } catch {
-            print("EdgeAlertManager: Failed to create haptic engine: \(error)")
-        }
+        print("🎯 EdgeAlertManager deinitialized")
     }
 
     // MARK: - Public API
@@ -131,6 +99,11 @@ class EdgeAlertManager {
 
         // If direction changed, reset state
         if newDirection != activeDirection {
+            if let dir = newDirection {
+                print("🎯 Edge hold STARTED: \(dir.rawValue)")
+            } else if activeDirection != nil {
+                print("🎯 Edge hold ENDED")
+            }
             activeDirection = newDirection
             lastEdgeDistance = nil
             stopPulses()
@@ -143,11 +116,20 @@ class EdgeAlertManager {
 
         // Scan for edge in the active direction
         if let distance = scanForEdge(in: edgeMap, direction: direction) {
-            // Edge detected - update pulse rate
+            // Edge detected - update stored distance
+            // print("🎯 Edge detected in \(direction.rawValue): distance=\(String(format: "%.3f", distance))")
             lastEdgeDistance = distance
-            scheduleNextPulse(distance: distance)
+
+            // Only schedule if timer is not already active
+            if pulseTimer == nil {
+                print("🎯 Edge detected - starting pulse sequence at distance=\(String(format: "%.3f", distance))")
+                scheduleNextPulse(distance: distance)
+            }
         } else {
             // No edge detected - stop pulses
+            if lastEdgeDistance != nil {
+                print("🎯 No edge detected (stopped)")
+            }
             lastEdgeDistance = nil
             stopPulses()
         }
@@ -162,6 +144,7 @@ class EdgeAlertManager {
         defer { CVPixelBufferUnlockBaseAddress(edgeMap, .readOnly) }
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(edgeMap) else {
+            print("🎯 ERROR: Could not get edge map base address")
             return nil
         }
 
@@ -178,6 +161,8 @@ class EdgeAlertManager {
 
         // Calculate scan range (how far to look beyond aperture)
         let maxScanPixels = Int(CGFloat(direction == .left || direction == .right ? width : height) * maxDetectionDistance)
+
+        print("🎯 Scanning \(direction.rawValue): edgeMap=\(width)x\(height), aperture=(\(apertureX),\(apertureY) \(apertureWidth)x\(apertureHeight)), maxScan=\(maxScanPixels)px")
 
         var nearestEdgePixels: Int?
 
@@ -283,6 +268,7 @@ class EdgeAlertManager {
         }
 
         let normalizedDistance = CGFloat(edgePixels) / CGFloat(maxScanPixels)
+        print("🎯 Found edge at \(edgePixels)px -> normalized=\(String(format: "%.3f", normalizedDistance))")
         return max(0.0, min(1.0, normalizedDistance)) // Clamp to [0, 1]
     }
 
@@ -296,60 +282,45 @@ class EdgeAlertManager {
         // distance = 1.0 (far) -> maxPulseInterval (slow)
         let interval = minPulseInterval + (maxPulseInterval - minPulseInterval) * distance
 
-        // Stop existing timer
-        pulseTimer?.invalidate()
+        print("🎯 Scheduling pulse: distance=\(String(format: "%.3f", distance)) -> interval=\(String(format: "%.3f", interval))s")
 
-        // Fire pulse immediately if this is first detection or distance decreased
-        if lastEdgeDistance == nil || distance < (lastEdgeDistance ?? 1.0) {
-            firePulse()
-        }
+        // Fire pulse immediately
+        firePulse()
 
-        // Schedule next pulse
-        pulseTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.firePulse()
+        // Schedule next pulse on MAIN THREAD (timers need a RunLoop!)
+        DispatchQueue.main.async { [weak self] in
+            self?.pulseTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+                self?.pulseTimer = nil  // Clear timer reference
+
+                print("🎯 Timer fired! Scheduling next pulse...")
+
+                // Use current stored distance for next pulse
+                if let currentDistance = self?.lastEdgeDistance, self?.activeDirection != nil {
+                    self?.scheduleNextPulse(distance: currentDistance)
+                } else {
+                    print("🎯 Timer fired but no active direction - stopping")
+                }
+            }
         }
     }
 
     /// Stop all haptic pulses
     private func stopPulses() {
-        pulseTimer?.invalidate()
-        pulseTimer = nil
+        // Must invalidate on main thread where timer was created
+        DispatchQueue.main.async { [weak self] in
+            self?.pulseTimer?.invalidate()
+            self?.pulseTimer = nil
+        }
     }
 
     /// Fire a single transient haptic pulse
     private func firePulse() {
-        guard let engine = hapticEngine else { return }
-
-        // Ensure engine is running
-        do {
-            try engine.start()
-        } catch {
-            print("EdgeAlertManager: Failed to start haptic engine: \(error)")
+        guard let manager = hapticManager else {
+            print("🎯 ERROR: HapticFeedbackManager not available")
             return
         }
 
-        // Create sharp transient event ("stab")
-        let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: hapticIntensity)
-        let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: hapticSharpness)
-
-        let event = CHHapticEvent(
-            eventType: .hapticTransient,
-            parameters: [intensity, sharpness],
-            relativeTime: 0
-        )
-
-        do {
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            let player = try engine.makePlayer(with: pattern)
-            try player.start(atTime: CHHapticTimeImmediate)
-
-            // Schedule next pulse if we still have an active direction
-            if let distance = lastEdgeDistance, activeDirection != nil {
-                scheduleNextPulse(distance: distance)
-            }
-
-        } catch {
-            print("EdgeAlertManager: Failed to play haptic: \(error)")
-        }
+        print("🎯 FIRING PULSE (intensity=\(hapticIntensity), sharpness=\(hapticSharpness))")
+        manager.fireTransientPulse(intensity: hapticIntensity, sharpness: hapticSharpness)
     }
 }
