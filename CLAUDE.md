@@ -62,10 +62,15 @@ iOS app overlaying LiDAR depth (meters) on camera preview. Color mapping: **near
 - Continuous haptic intensity driven by proximity (0–1).
 - Uses Core Haptics; auto-renews 30s pattern every 28s to emulate continuous vibration.
 - Handles engine interruptions and dynamic intensity updates.
+- **Provides transient pulse API** (`fireTransientPulse()`) for edge alert system.
+- Centralized haptic engine shared by both continuous and transient haptics.
 
 ### EdgeAlertManager.swift
 - On edge-hold: scans oriented edge map outward from center aperture to find nearest significant edge (above threshold).
-- Computes normalized distance (0 = at aperture, 1 = max range) → maps to pulse rate; fires transient haptics (sharp "stabs").
+- Computes normalized distance (0 = at aperture, 1 = max range) → maps to pulse rate; fires transient haptics via `HapticFeedbackManager`.
+- **Timer-based self-sustaining pulse loop** (runs on main thread RunLoop).
+- Uses dependency injection: receives `HapticFeedbackManager` reference in initializer.
+- Detects edges only when `pulseTimer == nil` to avoid interrupting active pulse sequence.
 - Defaults:
   - aperture size: 20% of frame
   - detection range: 40% of frame
@@ -78,13 +83,19 @@ iOS app overlaying LiDAR depth (meters) on camera preview. Color mapping: **near
 ## Processing pipeline
 1. Capture: `AVCaptureDepthDataOutput` (depth) + `AVCaptureVideoDataOutput` (RGB).
 2. DepthProcessor: convert → Float32 meters; preserve raw buffer; sample center aperture.
-3. EdgeDetectorGPU: depth-only Sobel → normalized edge map.
+3. EdgeDetectorGPU (background queue): depth-only Sobel → normalized edge map (oriented to match screen).
 4. HapticFeedbackManager: average center depth (meters) → `metersToProximity()` → continuous intensity.
-5. EdgeAlertManager: scan edge map on edge-hold → transient pulses.
+5. EdgeAlertManager:
+   - Called from background edge queue with oriented edge map
+   - Scans for edges only if no active pulse timer
+   - Fires first pulse immediately, schedules timer on **main thread** for next pulse
+   - Timer callback recursively schedules next pulse with updated distance
 6. DepthVisualizer: meters → proximity → false colors; orientation; render CGImage.
 7. Display: update UIImageViews on main thread.
 
 **Invariant:** raw meter values remain available end-to-end; proximity conversion is on-demand.
+
+**Threading:** Edge detection on background queue; timers and haptics on main thread (RunLoop requirement).
 
 ---
 
@@ -105,6 +116,7 @@ Depth arrives landscape by default. Visualizer maps orientations via `CIImage.or
 - Edge detection runs on GPU; default `downscaleFactor = 0.5` (~4× speedup). Typical times: ~2ms (0.5x), <1ms (0.25x).
 - Edge detection often processes every 3rd frame (~10fps) to balance load.
 - Proximity conversion non-destructive; new buffers allocated only when needed.
+- **Haptic timers run on main thread** (required for RunLoop); edge detection queries happen on background queue but don't block pulse loop.
 
 ---
 
@@ -113,6 +125,8 @@ Depth arrives landscape by default. Visualizer maps orientations via `CIImage.or
 - Keep `metersToProximity()` formula and semantics.
 - Keep defaults `defaultMinDepth = 1.321`, `defaultMaxDepth = 1.639` unless user explicitly requests change.
 - Single tap = calibrate, double-tap = reset.
+- **EdgeAlertManager requires HapticFeedbackManager** dependency (passed in init).
+- **All Timer operations must run on main thread** (RunLoop requirement).
 
 ---
 
