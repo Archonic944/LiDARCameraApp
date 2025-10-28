@@ -38,6 +38,7 @@ class CameraViewController: UIViewController {
 
     // Haptic feedback
     private let hapticManager = HapticFeedbackManager()
+    private let edgeAlertManager = EdgeAlertManager()
 
     // Gesture management
     private var gestureManager: GestureManager!
@@ -465,6 +466,17 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
 
                 // Update cached edge map (now correctly oriented)
                 self.latestEdgeMap = orientedEdgeMap
+
+                // Update edge alert based on current hold state
+                if let gestureManager = self.gestureManager {
+                    self.edgeAlertManager.updateEdgeAlert(
+                        edgeMap: orientedEdgeMap,
+                        holdingLeft: gestureManager.isHoldingLeftEdge,
+                        holdingRight: gestureManager.isHoldingRightEdge,
+                        holdingTop: gestureManager.isHoldingTopEdge,
+                        holdingBottom: gestureManager.isHoldingBottomEdge
+                    )
+                }
 
                 // Visualize edges and update UI
                 let viewSize = UIScreen.main.bounds.size

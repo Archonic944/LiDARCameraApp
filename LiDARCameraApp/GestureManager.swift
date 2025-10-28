@@ -168,7 +168,7 @@ class GestureManager {
         // Update left edge
         if isHoldingLeftEdge != left {
             isHoldingLeftEdge = left
-            UIView.animate(withDuration: 0.15) {
+            UIView.animate(withDuration: 0.05) {
                 self.leftEdgeIndicator.alpha = left ? 1.0 : 0.0
             }
         }
@@ -176,7 +176,7 @@ class GestureManager {
         // Update right edge
         if isHoldingRightEdge != right {
             isHoldingRightEdge = right
-            UIView.animate(withDuration: 0.15) {
+            UIView.animate(withDuration: 0.05) {
                 self.rightEdgeIndicator.alpha = right ? 1.0 : 0.0
             }
         }
@@ -184,7 +184,7 @@ class GestureManager {
         // Update top edge
         if isHoldingTopEdge != top {
             isHoldingTopEdge = top
-            UIView.animate(withDuration: 0.15) {
+            UIView.animate(withDuration: 0.05) {
                 self.topEdgeIndicator.alpha = top ? 1.0 : 0.0
             }
         }
@@ -192,7 +192,7 @@ class GestureManager {
         // Update bottom edge
         if isHoldingBottomEdge != bottom {
             isHoldingBottomEdge = bottom
-            UIView.animate(withDuration: 0.15) {
+            UIView.animate(withDuration: 0.05) {
                 self.bottomEdgeIndicator.alpha = bottom ? 1.0 : 0.0
             }
         }
