@@ -7,8 +7,6 @@
 //  - Algorithm 1 (P_Scan): Row and column depth discontinuity scanning
 //  - Algorithm 2 (Occluding_Edge_Detection): Patch-based temporal coherence optimization
 //
-//  Revised: Batch command buffer + GPU patch-flagging + resource reuse to fix massive slowdowns
-//
 
 import Foundation
 import CoreImage
@@ -329,7 +327,7 @@ class EdgeDetectorGPU {
         ] as CFDictionary
 
         // Source: One-component float (depth)
-        if srcPixelBuffer == nil || srcPixelBuffer!.width != width || srcPixelBuffer!.height != height {
+        if srcPixelBuffer == nil || CVPixelBufferGetWidth(srcPixelBuffer!) != width || CVPixelBufferGetHeight(srcPixelBuffer!) != height {
             srcPixelBuffer = nil
             srcTexture = nil
             var pb: CVPixelBuffer?
@@ -342,7 +340,7 @@ class EdgeDetectorGPU {
             }
         }
 
-        // Masks & output use BGRA8Unorm (float4 read/write in kernels)
+        // Masks & output use BGRA8Unorm
         func makeOrReuseMask(_ pbRef: inout CVPixelBuffer?, _ texRef: inout MTLTexture?, pixelFormat: MTLPixelFormat) {
             if texRef == nil || texRef!.width != width || texRef!.height != height {
                 // create/replace
@@ -398,7 +396,7 @@ class EdgeDetectorGPU {
             return nil
         }
 
-        // Render CI depth image into srcTexture (single small command buffer ok)
+        // Render CI depth image into srcTexture
         if let cmdBuf = queue.makeCommandBuffer() {
             ciContext.render(depthCIImage, to: srcTex, commandBuffer: cmdBuf, bounds: depthCIImage.extent, colorSpace: CGColorSpaceCreateDeviceGray())
             cmdBuf.commit()
@@ -407,9 +405,8 @@ class EdgeDetectorGPU {
 
         // Zero-out patch flags buffer on CPU quickly (we will use GPU to set flags)
         let patchCount = patchGridWidth * patchGridHeight
-        if let ptr = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self) {
-            for i in 0..<patchCount { ptr[i] = 0 }
-        }
+        let ptrZero = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self)
+        for i in 0..<patchCount { ptrZero[i] = 0 }
 
         // Single command buffer for all compute work of this frame
         guard let commandBuffer = queue.makeCommandBuffer(),
@@ -566,27 +563,24 @@ class EdgeDetectorGPU {
 
         encoder.endEncoding()
 
-        // Commit once and wait once (single synchronization)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
-        // Read back patch flags (single memcopy)
+        // Read back patch flags
         var newPatchFlags = Array(repeating: Array(repeating: false, count: patchGridHeight), count: patchGridWidth)
-        if let ptr = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self) {
-            for px in 0..<patchGridWidth {
-                for py in 0..<patchGridHeight {
-                    let idx = px * patchGridHeight + py
-                    if ptr[idx] != 0 {
-                        newPatchFlags[px][py] = true
-                        if enablePatchOptimization {
-                            setNeighborFlags(patchX: px, patchY: py, in: &newPatchFlags)
-                        }
-                    } else {
-                        newPatchFlags[px][py] = false
-                    }
+        let ptr = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self)
+        for px in 0..<patchGridWidth {
+            for py in 0..<patchGridHeight {
+                let idx = px * patchGridHeight + py
+                if ptr[idx] != 0 {
+                    newPatchFlags[px][py] = true
+                    if enablePatchOptimization { setNeighborFlags(patchX: px, patchY: py, in: &newPatchFlags) }
+                } else {
+                    newPatchFlags[px][py] = false
                 }
             }
         }
+
 
         if enablePatchOptimization { patchFlags = newPatchFlags }
 
@@ -598,7 +592,7 @@ class EdgeDetectorGPU {
         }
     }
 
-    // Helper to dispatch kernels covering the whole texture (used for clear and combine)
+    // Helper to dispatch kernels covering the whole texture
     private func dispatchFullTexture(encoder: MTLComputeCommandEncoder, pipe: MTLComputePipelineState, width: Int, height: Int) {
         let threadsPerGrid = MTLSize(width: width, height: height, depth: 1)
         let threadExecutionWidth = pipe.threadExecutionWidth
@@ -692,7 +686,7 @@ class EdgeDetectorGPU {
 
     // MARK: - Structs & small helpers
 
-    // Mirror of the MSL PatchScanParams layout (keep 16-byte alignment)
+    // Mirror of the MSL PatchScanParams layout
     private struct PatchScanParamsStruct {
         var patchMinX: UInt32
         var patchMaxX: UInt32
