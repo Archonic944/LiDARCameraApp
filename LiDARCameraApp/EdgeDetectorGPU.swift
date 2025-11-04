@@ -63,7 +63,7 @@ class EdgeDetectorGPU {
     var enablePatchOptimization: Bool = true
     var patchGridWidth: Int = 32
     var patchGridHeight: Int = 24
-    var randomSearchRate: CGFloat = 0.05
+    var randomSearchRate: CGFloat = 0.15 // How many of the patches are scanned each frame
     var rowColSkip: Int = 1
 
     // MARK: - Temporal State
