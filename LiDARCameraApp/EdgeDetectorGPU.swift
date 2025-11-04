@@ -51,9 +51,9 @@ class EdgeDetectorGPU {
 
     // MARK: - Customizable Parameters
 
-    var edgeDetectionThresholdRatio: CGFloat = 0.05
+    var edgeDetectionThresholdRatio: CGFloat = 0.2 // Baseline, physical threshold for physical sensitivity of the detector. Higher = less sensitive
     var edgeAmplification: CGFloat = 2.5
-    var edgeThreshold: CGFloat = 0.1
+    var edgeThreshold: CGFloat = 0.4 // Threshold for simple post-processing cleanup
     var enableThresholding: Bool = true
     var preSmoothingRadius: CGFloat = 0.5
     var downscaleFactor: CGFloat = 0.8
@@ -710,6 +710,22 @@ class EdgeDetectorGPU {
             "inputMinComponents": CIVector(x: edgeThreshold, y: edgeThreshold, z: edgeThreshold, w: 0),
             "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
         ]), let out = clamp.outputImage {
+            edgeImage = out
+        }
+
+        // Connect nearby pixels and thicken lines
+        if let morphology = CIFilter(name: "CIMorphologyMaximum", parameters: [
+            kCIInputImageKey: edgeImage,
+            kCIInputRadiusKey: 1.5
+        ]), let out = morphology.outputImage {
+            edgeImage = out
+        }
+
+        // Clamp to 0 or 1
+        if let posterize = CIFilter(name: "CIColorPosterize", parameters: [
+            kCIInputImageKey: edgeImage,
+            "inputLevels": 2
+        ]), let out = posterize.outputImage {
             edgeImage = out
         }
 
