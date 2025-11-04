@@ -287,7 +287,7 @@ class EdgeAlertManager {
         // Fire pulse immediately
         firePulse()
 
-        // Schedule next pulse on MAIN THREAD (timers need a RunLoop!)
+        // Schedule next pulse
         DispatchQueue.main.async { [weak self] in
             self?.pulseTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
                 self?.pulseTimer = nil  // Clear timer reference
