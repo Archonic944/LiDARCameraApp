@@ -64,8 +64,9 @@ class EdgeDetectorGPU {
 
     // Hough parameters
     var houghThetaResolution: Int = 180 // Number of angles to check
-    var houghRhoResolution: Int = 200   // Resolution of the distance parameter
-    var houghPeakThreshold: Int = 40    // Min votes to be considered a line
+    var houghRhoResolution: Int = 400   // Resolution of the distance parameter
+    var houghPeakThreshold: Int = 100   // Min votes to be considered a line
+    var houghLineThickness: Float = 2.0 // Thickness for line drawing (in pixels)
 
 
     // MARK: - Customizable Parameters
@@ -347,16 +348,18 @@ class EdgeDetectorGPU {
             return;
         }
 
-        // Simple non-maximum suppression
+        // Stronger non-maximum suppression with larger window
         bool isPeak = true;
-        for (int dy = -2; dy <= 2; ++dy) {
-            for (int dx = -2; dx <= 2; ++dx) {
+        for (int dy = -4; dy <= 4; ++dy) {
+            for (int dx = -4; dx <= 4; ++dx) {
                 if (dx == 0 && dy == 0) continue;
                 int2 n = int2(gid) + int2(dx, dy);
 
                 if (n.x >= 0 && uint(n.x) < thetaRes && n.y >= 0 && uint(n.y) < rhoRes) {
                     uint neighbor_idx = uint(n.y) * thetaRes + uint(n.x);
-                    if (atomic_load_explicit(&accumulator[neighbor_idx], memory_order_relaxed) > votes) {
+                    uint neighborVotes = atomic_load_explicit(&accumulator[neighbor_idx], memory_order_relaxed);
+                    // Require current to be strictly greater (not just >=) to reduce duplicates
+                    if (neighborVotes > votes) {
                         isPeak = false;
                         break;
                     }
@@ -375,11 +378,12 @@ class EdgeDetectorGPU {
 
     // Kernel to draw the detected lines
     kernel void drawHoughLines(
-        texture2d<float, access::write> outputTex [[texture(0)]],
+        texture2d<float, access::read> edgeTex [[texture(0)]],
+        texture2d<float, access::write> outputTex [[texture(1)]],
         device HoughLine *lines [[buffer(0)]],
         device atomic_uint *lineCount [[buffer(1)]],
         constant float *sinCosTable [[buffer(2)]],
-        constant uint *houghParams [[buffer(3)]], // [0]=rhoRes, [1]=thetaRes
+        constant uint *houghParams [[buffer(3)]], // [0]=rhoRes, [1]=thetaRes, [2]=lineThickness (as float bits)
         uint2 gid [[thread_position_in_grid]]
     ) {
         uint numLines = min(200u, atomic_load_explicit(lineCount, memory_order_relaxed));
@@ -389,14 +393,19 @@ class EdgeDetectorGPU {
         uint imageHeight = outputTex.get_height();
         if (gid.x >= imageWidth || gid.y >= imageHeight) return;
 
+        // Only draw lines where there are actual edges
+        float edgeVal = edgeTex.read(gid).r;
+        if (edgeVal <= 0.1f) return; // Skip non-edge pixels
+
         float maxRho = sqrt(pow(float(imageWidth), 2.0) + pow(float(imageHeight), 2.0));
         uint rhoRes = houghParams[0];
         uint thetaRes = houghParams[1];
+        float lineThickness = as_type<float>(houghParams[2]); // Reinterpret bits as float
         float rhoStep = (2.0 * maxRho) / float(rhoRes);
 
         for (uint i = 0; i < numLines; ++i) {
             HoughLine line = lines[i];
-            
+
             float cosTheta = sinCosTable[line.thetaIndex];
             float sinTheta = sinCosTable[line.thetaIndex + thetaRes];
 
@@ -404,7 +413,7 @@ class EdgeDetectorGPU {
 
             float pointRho = float(gid.x) * cosTheta + float(gid.y) * sinTheta;
 
-            if (abs(pointRho - rho) < 1.5f) {
+            if (abs(pointRho - rho) < lineThickness) {
                 outputTex.write(float4(1.0), gid);
                 return;
             }
@@ -1228,33 +1237,51 @@ class EdgeDetectorGPU {
 
         
 
-                        // 4. Draw lines
+                        // 4. Draw lines (only where edges exist)
 
-        
+
+
+                        var houghP3: [UInt32] = [
+
+                            UInt32(houghRhoResolution),
+
+                            UInt32(houghThetaResolution),
+
+                            houghLineThickness.bitPattern // Pass float as uint bits
+
+                        ]
+
+                        let paramsBuf3 = dev.makeBuffer(bytes: &houghP3, length: houghP3.count * MemoryLayout<UInt32>.stride, options: .storageModeShared)!
+
+
 
                         encoder.setComputePipelineState(houghLinePipe)
 
-        
 
-                        encoder.setTexture(outputTex, index: 0)
 
-        
+                        encoder.setTexture(edgeMaskTex, index: 0) // Input: edge mask
+
+
+
+                        encoder.setTexture(outputTex, index: 1)    // Output: lines
+
+
 
                         encoder.setBuffer(linesBuf, offset: 0, index: 0)
 
-        
+
 
                         encoder.setBuffer(lineCountBuffer, offset: 0, index: 1)
 
-        
+
 
                         encoder.setBuffer(sinCosBuf, offset: 0, index: 2)
 
-        
 
-                        encoder.setBuffer(paramsBuf, offset: 0, index: 3) // Re-uses houghP1
 
-        
+                        encoder.setBuffer(paramsBuf3, offset: 0, index: 3)
+
+
 
                         dispatchFullTexture(encoder: encoder, pipe: houghLinePipe, width: width, height: height)
 
