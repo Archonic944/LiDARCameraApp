@@ -43,8 +43,7 @@ class EdgeDetectorGPU {
     // Persistent small GPU buffer: one uint per patch indicating "has edge"
     private var patchFlagBuffer: MTLBuffer?
 
-    // small shared per-dispatch params buffer (optional)
-    private var patchParamsBuffer: MTLBuffer?
+
 
     // Keep last size to detect resize
     private var lastTextureWidth: Int = 0
@@ -365,8 +364,7 @@ class EdgeDetectorGPU {
         let flagSize = patchCount * MemoryLayout<UInt32>.stride
         patchFlagBuffer = dev.makeBuffer(length: flagSize, options: .storageModeShared)
 
-        // patchParamsBuffer sized to hold PatchScanParams
-        patchParamsBuffer = dev.makeBuffer(length: 64, options: .storageModeShared)
+
 
         return true
     }
@@ -391,8 +389,7 @@ class EdgeDetectorGPU {
         guard ensureResources(width: width, height: height) else { return nil }
         guard let srcPB = srcPixelBuffer, let srcTex = srcTexture,
               let rowMaskTex = rowMaskTexture, let colMaskTex = colMaskTexture,
-              let outputTex = outputMaskTexture, let patchFlagsBuf = patchFlagBuffer,
-              let paramsBuf = patchParamsBuffer else {
+              let outputTex = outputMaskTexture, let patchFlagsBuf = patchFlagBuffer else {
             return nil
         }
 
@@ -464,12 +461,11 @@ class EdgeDetectorGPU {
                                                    thresholdRatio: ratio,
                                                    patchIndex: UInt32(px * patchGridHeight + py),
                                                    pad0: 0)
-                // copy params into shared buffer
-                memcpy(paramsBuf.contents(), &params, MemoryLayout<PatchScanParamsStruct>.size)
+                // Pass params by value to avoid race condition on shared buffer
+                encoder.setBytes(&params, length: MemoryLayout<PatchScanParamsStruct>.size, index: 0)
 
                 encoder.setTexture(srcTex, index: 0)
                 encoder.setTexture(rowMaskTex, index: 1)
-                encoder.setBuffer(paramsBuf, offset: 0, index: 0)
 
                 // dispatch rows = patchHeight (we supply a 1D grid where "row" parameter is relative row)
                 let patchHeight = Int(bounds.maxY - bounds.minY)
@@ -505,11 +501,10 @@ class EdgeDetectorGPU {
                                                    thresholdRatio: ratio,
                                                    patchIndex: UInt32(px * patchGridHeight + py),
                                                    pad0: 0)
-                memcpy(paramsBuf.contents(), &params, MemoryLayout<PatchScanParamsStruct>.size)
+                encoder.setBytes(&params, length: MemoryLayout<PatchScanParamsStruct>.size, index: 0)
 
                 encoder.setTexture(srcTex, index: 0)
                 encoder.setTexture(colMaskTex, index: 1)
-                encoder.setBuffer(paramsBuf, offset: 0, index: 0)
 
                 let patchWidth = Int(bounds.maxX - bounds.minX)
                 if patchWidth <= 0 { continue }
@@ -545,11 +540,10 @@ class EdgeDetectorGPU {
                                                    thresholdRatio: ratio,
                                                    patchIndex: UInt32(px * patchGridHeight + py),
                                                    pad0: 0)
-                memcpy(paramsBuf.contents(), &params, MemoryLayout<PatchScanParamsStruct>.size)
+                encoder.setBytes(&params, length: MemoryLayout<PatchScanParamsStruct>.size, index: 1)
 
                 encoder.setTexture(rowMaskTex, index: 0)
                 encoder.setTexture(colMaskTex, index: 1)
-                encoder.setBuffer(paramsBuf, offset: 0, index: 1)
 
                 let patchWidth = Int(bounds.maxX - bounds.minX)
                 let patchHeight = Int(bounds.maxY - bounds.minY)
