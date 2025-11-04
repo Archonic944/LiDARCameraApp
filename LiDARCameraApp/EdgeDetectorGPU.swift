@@ -7,17 +7,8 @@
 //  - Algorithm 1 (P_Scan): Row and column depth discontinuity scanning
 //  - Algorithm 2 (Occluding_Edge_Detection): Patch-based temporal coherence optimization
 //
-//  Algorithm 1 scans each row and column of the depth map to find occluding edges:
-//  pixels where the depth difference to the last valid neighbor exceeds a proportional
-//  threshold: |d1 - d2| > min(d1, d2) * T. The nearer pixel is marked as the edge.
+//  Revised: Batch command buffer + GPU patch-flagging + resource reuse to fix massive slowdowns
 //
-//  Algorithm 2 exploits temporal coherence in video streams by dividing the depth image
-//  into patches and only scanning patches where edges were found in the previous frame
-//  (plus random patches for detecting new edges). This provides ~50% speedup while
-//  detecting >95% of edges according to the paper.
-//
-//  This GPU implementation uses Metal compute kernels for all operations, achieving
-//  real-time performance without CPU readbacks.
 
 import Foundation
 import CoreImage
@@ -40,6 +31,27 @@ class EdgeDetectorGPU {
     private var textureCache: CVMetalTextureCache?
     private var supportsNonUniformThreadgroups: Bool = false
 
+    // Persistent/reused pixel buffers & textures (to avoid per-frame allocations)
+    private var srcPixelBuffer: CVPixelBuffer?
+    private var srcTexture: MTLTexture?
+
+    private var rowMaskPixelBuffer: CVPixelBuffer?
+    private var rowMaskTexture: MTLTexture?
+    private var colMaskPixelBuffer: CVPixelBuffer?
+    private var colMaskTexture: MTLTexture?
+    private var outputMaskPixelBuffer: CVPixelBuffer?
+    private var outputMaskTexture: MTLTexture?
+
+    // Persistent small GPU buffer: one uint per patch indicating "has edge"
+    private var patchFlagBuffer: MTLBuffer?
+
+    // small shared per-dispatch params buffer (optional)
+    private var patchParamsBuffer: MTLBuffer?
+
+    // Keep last size to detect resize
+    private var lastTextureWidth: Int = 0
+    private var lastTextureHeight: Int = 0
+
     // MARK: - Customizable Parameters
 
     var edgeDetectionThresholdRatio: CGFloat = 0.05
@@ -51,27 +63,15 @@ class EdgeDetectorGPU {
 
     // MARK: - Algorithm 2 Parameters (Patch-based Temporal Coherence)
 
-    /// Enable/disable Algorithm 2 patch-based optimization
     var enablePatchOptimization: Bool = true
-
-    /// Number of patches in horizontal direction (N in paper)
     var patchGridWidth: Int = 32
-
-    /// Number of patches in vertical direction (M in paper)
     var patchGridHeight: Int = 24
-
-    /// Random search rate (rand_search in paper) - fraction of patches to randomly search [0, 1]
     var randomSearchRate: CGFloat = 0.05
-
-    /// Row/column skip parameter (K in paper) - 1=no skip, 2=every other, 3=every third, etc.
     var rowColSkip: Int = 1
 
     // MARK: - Temporal State
 
-    /// Boolean flags for each patch (persists between frames)
     private var patchFlags: [[Bool]] = []
-
-    /// Track previous image size for reallocation check
     private var previousImageSize: CGSize = .zero
 
     // MARK: - Initialization
@@ -81,11 +81,10 @@ class EdgeDetectorGPU {
             self.metalDevice = dev
             self.metalCommandQueue = dev.makeCommandQueue()
             self.ciContext = CIContext(mtlDevice: dev)
-            
-            // Check for non-uniform threadgroup support
+
+            // Check for non-uniform threadgroup support (best effort heuristic)
             if #available(iOS 11.0, macOS 10.13, *) {
-                self.supportsNonUniformThreadgroups = dev.supportsFamily(.apple4) ||
-                                                       dev.supportsFamily(.mac2)
+                self.supportsNonUniformThreadgroups = true
             }
         } else {
             self.metalDevice = nil
@@ -118,13 +117,13 @@ class EdgeDetectorGPU {
         }
     }
 
-    // MARK: - Metal Compute Kernels
+    // MARK: - Metal Compute Kernels (modified for batched dispatch + GPU flags)
 
     private static let occludingEdgeComputeSource = """
     #include <metal_stdlib>
     using namespace metal;
 
-    // Parameters for patch-based scanning
+    // Parameters for patch-based scanning (matches Swift PatchScanParams below)
     struct PatchScanParams {
         uint patchMinX;
         uint patchMaxX;
@@ -132,6 +131,8 @@ class EdgeDetectorGPU {
         uint patchMaxY;
         uint rowColSkip;
         float thresholdRatio;
+        uint patchIndex; // index into hasEdges buffer
+        uint pad0;
     };
 
     // Clear texture kernel - GPU-based clearing
@@ -153,25 +154,23 @@ class EdgeDetectorGPU {
         constant PatchScanParams &params [[buffer(0)]],
         uint row [[thread_position_in_grid]]
     ) {
-        uint width = depthTex.get_width();
-        uint height = depthTex.get_height();
-
-        // Check if row is within patch bounds and should be scanned
-        if (row < params.patchMinY || row >= params.patchMaxY) return;
-        if ((row - params.patchMinY) % params.rowColSkip != 0) return;
+        // row is a relative row index across the dispatched grid; we want to map it to global row
+        uint globalRow = params.patchMinY + row;
+        if (globalRow >= params.patchMaxY) return;
+        if ((globalRow - params.patchMinY) % params.rowColSkip != 0) return;
 
         int lastX = -1;
         float lastV = 0.0f;
 
         for (uint x = params.patchMinX; x < params.patchMaxX; ++x) {
-            float d = depthTex.read(uint2(x, row)).r;
+            float d = depthTex.read(uint2(x, globalRow)).r;
             if (d > 0.0f) {
                 if (lastX >= 0) {
                     float thresh = min(d, lastV) * params.thresholdRatio;
                     if ((lastV - d) > thresh) {
-                        rowMaskTex.write(float4(1.0), uint2(x, row));
+                        rowMaskTex.write(float4(1.0), uint2(x, globalRow));
                     } else if ((d - lastV) > thresh) {
-                        rowMaskTex.write(float4(1.0), uint2(lastX, row));
+                        rowMaskTex.write(float4(1.0), uint2(lastX, globalRow));
                     }
                 }
                 lastX = int(x);
@@ -181,32 +180,28 @@ class EdgeDetectorGPU {
     }
 
     // Column-scan kernel with patch support and column skip: each thread scans one column
-    // Writes to separate output texture to avoid race conditions
     kernel void colScan(
         texture2d<float, access::read> depthTex [[texture(0)]],
         texture2d<float, access::write> colMaskTex [[texture(1)]],
         constant PatchScanParams &params [[buffer(0)]],
         uint col [[thread_position_in_grid]]
     ) {
-        uint width = depthTex.get_width();
-        uint height = depthTex.get_height();
-
-        // Check if column is within patch bounds and should be scanned
-        if (col < params.patchMinX || col >= params.patchMaxX) return;
-        if ((col - params.patchMinX) % params.rowColSkip != 0) return;
+        uint globalCol = params.patchMinX + col;
+        if (globalCol >= params.patchMaxX) return;
+        if ((globalCol - params.patchMinX) % params.rowColSkip != 0) return;
 
         int lastY = -1;
         float lastV = 0.0f;
 
         for (uint y = params.patchMinY; y < params.patchMaxY; ++y) {
-            float d = depthTex.read(uint2(col, y)).r;
+            float d = depthTex.read(uint2(globalCol, y)).r;
             if (d > 0.0f) {
                 if (lastY >= 0) {
                     float thresh = min(d, lastV) * params.thresholdRatio;
                     if ((lastV - d) > thresh) {
-                        colMaskTex.write(float4(1.0), uint2(col, y));
+                        colMaskTex.write(float4(1.0), uint2(globalCol, y));
                     } else if ((d - lastV) > thresh) {
-                        colMaskTex.write(float4(1.0), uint2(col, lastY));
+                        colMaskTex.write(float4(1.0), uint2(globalCol, lastY));
                     }
                 }
                 lastY = int(y);
@@ -229,49 +224,55 @@ class EdgeDetectorGPU {
         float rowEdge = rowMaskTex.read(gid).r;
         float colEdge = colMaskTex.read(gid).r;
 
-        // Combine edges with max operation
         float combinedEdge = max(rowEdge, colEdge);
         outputTex.write(float4(combinedEdge), gid);
     }
 
-    // Check if any edges exist in a rectangular patch region
+    // Check if any edges exist in a rectangular patch region (reads both masks)
+    // This kernel is dispatched for each patch with a 2D grid covering the patch region.
     kernel void checkPatchForEdges(
-        texture2d<float, access::read> maskTex [[texture(0)]],
+        texture2d<float, access::read> rowMaskTex [[texture(0)]],
+        texture2d<float, access::read> colMaskTex [[texture(1)]],
         device atomic_uint *hasEdges [[buffer(0)]],
-        constant uint4 &patchBounds [[buffer(1)]], // (minX, minY, maxX, maxY)
+        constant PatchScanParams &params [[buffer(1)]],
         uint2 gid [[thread_position_in_grid]]
     ) {
-        uint x = patchBounds.x + gid.x;
-        uint y = patchBounds.y + gid.y;
+        // gid.x/gid.y are local to the dispatched patch grid
+        uint localX = gid.x;
+        uint localY = gid.y;
 
-        if (x >= patchBounds.z || y >= patchBounds.w) return;
+        uint patchWidth = params.patchMaxX - params.patchMinX;
+        uint patchHeight = params.patchMaxY - params.patchMinY;
 
-        float edgeValue = maskTex.read(uint2(x, y)).r;
-        if (edgeValue > 0.0f) {
-            atomic_store_explicit(hasEdges, 1, memory_order_relaxed);
+        if (localX >= patchWidth || localY >= patchHeight) return;
+
+        uint x = params.patchMinX + localX;
+        uint y = params.patchMinY + localY;
+
+        float r = rowMaskTex.read(uint2(x, y)).r;
+        float c = colMaskTex.read(uint2(x, y)).r;
+
+        if (r > 0.0f || c > 0.0f) {
+            // set flag for this patch index (stored in params.patchIndex)
+            atomic_store_explicit(&hasEdges[params.patchIndex], 1u, memory_order_relaxed);
         }
     }
     """
 
-    // MARK: - Patch Management (Algorithm 2)
+    // MARK: - Patch Management Helpers
 
-    /// Initialize or resize patch flags array
     private func initializePatchFlags(width: Int, height: Int) {
         let currentSize = CGSize(width: width, height: height)
-
-        // Reinitialize if size changed or first time
         if previousImageSize != currentSize {
             patchFlags = Array(repeating: Array(repeating: true, count: patchGridHeight), count: patchGridWidth)
             previousImageSize = currentSize
         }
     }
 
-    /// Select R random patches to search (Equation 1 from paper)
     private func selectRandomPatches() {
         let totalPatches = patchGridWidth * patchGridHeight
         let randSearch = max(0.0, min(1.0, randomSearchRate))
         let numRandomPatches = max(1, Int(round(Double(totalPatches) * Double(randSearch))))
-
         for _ in 0..<numRandomPatches {
             let x = Int.random(in: 0..<patchGridWidth)
             let y = Int.random(in: 0..<patchGridHeight)
@@ -279,7 +280,6 @@ class EdgeDetectorGPU {
         }
     }
 
-    /// Get pixel bounds for a patch
     private func getPatchBounds(patchX: Int, patchY: Int, imageWidth: Int, imageHeight: Int) -> (minX: Int, minY: Int, maxX: Int, maxY: Int) {
         let patchWidth = imageWidth / patchGridWidth
         let patchHeight = imageHeight / patchGridHeight
@@ -292,7 +292,6 @@ class EdgeDetectorGPU {
         return (minX, minY, maxX, maxY)
     }
 
-    /// Set neighboring patches' flags to true (modifies provided flags array)
     private func setNeighborFlags(patchX: Int, patchY: Int, in flags: inout [[Bool]]) {
         for dx in -1...1 {
             for dy in -1...1 {
@@ -305,75 +304,74 @@ class EdgeDetectorGPU {
         }
     }
 
-    // MARK: - Main Edge Detection
+    // MARK: - Public API: Edge detection entry
 
     func detectEdges(rgbImage: CIImage?, depthMap: CVPixelBuffer) -> CVPixelBuffer? {
         return detectDepthEdges(from: depthMap)
     }
 
-    private func detectDepthEdges(from depthMap: CVPixelBuffer) -> CVPixelBuffer? {
-        var ciDepth = CIImage(cvPixelBuffer: depthMap)
-        let originalExtent = ciDepth.extent
+    // MARK: - Main pipeline
 
-        // Clamp invalid depth range
-        if let clamp = CIFilter(name: "CIColorClamp", parameters: [
-            kCIInputImageKey: ciDepth,
-            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputMaxComponents": CIVector(x: 99, y: 99, z: 99, w: 1)
-        ]), let output = clamp.outputImage {
-            ciDepth = output
+    private func ensureResources(width: Int, height: Int) -> Bool {
+        guard let dev = metalDevice else { return false }
+
+        // Recreate pixel buffers + MTLTextures only when size changes
+        if width == lastTextureWidth && height == lastTextureHeight, patchFlagBuffer != nil {
+            return true
         }
 
-        // Downscale for performance
-        if downscaleFactor < 1.0,
-           let scale = CIFilter(name: "CILanczosScaleTransform", parameters: [
-                kCIInputImageKey: ciDepth,
-                kCIInputScaleKey: downscaleFactor,
-                kCIInputAspectRatioKey: 1.0
-           ]), let out = scale.outputImage {
-            ciDepth = out
+        lastTextureWidth = width
+        lastTextureHeight = height
+
+        let options: CFDictionary = [
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferCGImageCompatibilityKey: true
+        ] as CFDictionary
+
+        // Source: One-component float (depth)
+        if srcPixelBuffer == nil || srcPixelBuffer!.width != width || srcPixelBuffer!.height != height {
+            srcPixelBuffer = nil
+            srcTexture = nil
+            var pb: CVPixelBuffer?
+            CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_OneComponent32Float, options, &pb)
+            srcPixelBuffer = pb
+            if let cache = textureCache, let srcPB = srcPixelBuffer {
+                var ref: CVMetalTexture?
+                CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, srcPB, nil, .r32Float, width, height, 0, &ref)
+                if let ref = ref { srcTexture = CVMetalTextureGetTexture(ref) }
+            }
         }
 
-        // Optional blur smoothing
-        if preSmoothingRadius > 0.0,
-           let blur = CIFilter(name: "CIGaussianBlur", parameters: [
-                kCIInputImageKey: ciDepth,
-                kCIInputRadiusKey: preSmoothingRadius
-           ]), let out = blur.outputImage {
-            ciDepth = out
+        // Masks & output use BGRA8Unorm (float4 read/write in kernels)
+        func makeOrReuseMask(_ pbRef: inout CVPixelBuffer?, _ texRef: inout MTLTexture?, pixelFormat: MTLPixelFormat) {
+            if texRef == nil || texRef!.width != width || texRef!.height != height {
+                // create/replace
+                pbRef = nil
+                var pb: CVPixelBuffer?
+                CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &pb)
+                pbRef = pb
+                if let cache = textureCache, let pb = pbRef {
+                    var ref: CVMetalTexture?
+                    CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pb, nil, pixelFormat, width, height, 0, &ref)
+                    if let ref = ref { texRef = CVMetalTextureGetTexture(ref) }
+                }
+            }
         }
 
-        // Perform GPU row/column scans
-        guard var edgeImage = runGPUScan(depthCIImage: ciDepth, ratio: Float(edgeDetectionThresholdRatio)) else {
-            return nil
-        }
+        makeOrReuseMask(&rowMaskPixelBuffer, &rowMaskTexture, pixelFormat: .bgra8Unorm)
+        makeOrReuseMask(&colMaskPixelBuffer, &colMaskTexture, pixelFormat: .bgra8Unorm)
+        makeOrReuseMask(&outputMaskPixelBuffer, &outputMaskTexture, pixelFormat: .bgra8Unorm)
 
-        // Amplify
-        if edgeAmplification > 1.0,
-           let mult = CIFilter(name: "CIColorMatrix", parameters: [
-                kCIInputImageKey: edgeImage,
-                "inputRVector": CIVector(x: edgeAmplification, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: edgeAmplification, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: edgeAmplification, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
-           ]), let out = mult.outputImage {
-            edgeImage = out
-        }
+        // patchFlagBuffer: one uint per patch
+        let patchCount = max(1, patchGridWidth * patchGridHeight)
+        let flagSize = patchCount * MemoryLayout<UInt32>.stride
+        patchFlagBuffer = dev.makeBuffer(length: flagSize, options: .storageModeShared)
 
-        // Threshold
-        if enableThresholding && edgeThreshold > 0.0,
-           let clamp = CIFilter(name: "CIColorClamp", parameters: [
-                kCIInputImageKey: edgeImage,
-                "inputMinComponents": CIVector(x: edgeThreshold, y: edgeThreshold, z: edgeThreshold, w: 0),
-                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
-           ]), let out = clamp.outputImage {
-            edgeImage = out
-        }
+        // patchParamsBuffer sized to hold PatchScanParams
+        patchParamsBuffer = dev.makeBuffer(length: 64, options: .storageModeShared)
 
-        return createPixelBuffer(from: edgeImage)
+        return true
     }
-
-    // MARK: - GPU Row/Column Scan Logic (Algorithm 2 Implementation)
 
     private func runGPUScan(depthCIImage: CIImage, ratio: Float) -> CIImage? {
         guard let dev = metalDevice,
@@ -382,289 +380,241 @@ class EdgeDetectorGPU {
               let rowPipe = rowPipeline,
               let colPipe = colPipeline,
               let combinePipe = combinePipeline,
-              let clearPipe = clearPipeline else {
+              let clearPipe = clearPipeline,
+              let checkPipe = checkPatchPipeline else {
             return nil
         }
 
         let width = Int(depthCIImage.extent.width)
         let height = Int(depthCIImage.extent.height)
-
-        // Initialize patch flags if needed
         initializePatchFlags(width: width, height: height)
+        if enablePatchOptimization { selectRandomPatches() }
 
-        // Algorithm 2: Select random patches to search
-        if enablePatchOptimization {
-            selectRandomPatches()
+        guard ensureResources(width: width, height: height) else { return nil }
+        guard let srcPB = srcPixelBuffer, let srcTex = srcTexture,
+              let rowMaskTex = rowMaskTexture, let colMaskTex = colMaskTexture,
+              let outputTex = outputMaskTexture, let patchFlagsBuf = patchFlagBuffer,
+              let paramsBuf = patchParamsBuffer else {
+            return nil
         }
 
-        let options: CFDictionary = [
-            kCVPixelBufferMetalCompatibilityKey: true,
-            kCVPixelBufferCGImageCompatibilityKey: true
-        ] as CFDictionary
+        // Render CI depth image into srcTexture (single small command buffer ok)
+        if let cmdBuf = queue.makeCommandBuffer() {
+            ciContext.render(depthCIImage, to: srcTex, commandBuffer: cmdBuf, bounds: depthCIImage.extent, colorSpace: CGColorSpaceCreateDeviceGray())
+            cmdBuf.commit()
+            cmdBuf.waitUntilCompleted() // unavoidable to have srcTexture content before compute
+        }
 
-        // Create source texture
-        var srcPixelBuffer: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_OneComponent32Float, options, &srcPixelBuffer)
-        guard let srcPB = srcPixelBuffer else { return nil }
+        // Zero-out patch flags buffer on CPU quickly (we will use GPU to set flags)
+        let patchCount = patchGridWidth * patchGridHeight
+        if let ptr = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self) {
+            for i in 0..<patchCount { ptr[i] = 0 }
+        }
 
-        var srcTexRef: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, srcPB, nil, .r32Float, width, height, 0, &srcTexRef)
-        guard let srcTexture = srcTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+        // Single command buffer for all compute work of this frame
+        guard let commandBuffer = queue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            return nil
+        }
 
-        // Render CI depth image into Metal texture
-        let cmdBuf = queue.makeCommandBuffer()
-        ciContext.render(depthCIImage, to: srcTexture, commandBuffer: cmdBuf, bounds: depthCIImage.extent, colorSpace: CGColorSpaceCreateDeviceGray())
-        cmdBuf?.commit()
-        cmdBuf?.waitUntilCompleted()
+        // 1) Clear masks using clearKernel (batched)
+        encoder.setComputePipelineState(clearPipe)
+        // clear row mask
+        encoder.setTexture(rowMaskTex, index: 0)
+        dispatchFullTexture(encoder: encoder, pipe: clearPipe, width: width, height: height)
+        // clear col mask
+        encoder.setTexture(colMaskTex, index: 0)
+        dispatchFullTexture(encoder: encoder, pipe: clearPipe, width: width, height: height)
+        // clear output mask
+        encoder.setTexture(outputTex, index: 0)
+        dispatchFullTexture(encoder: encoder, pipe: clearPipe, width: width, height: height)
 
-        // Create row mask texture
-        var rowMaskPB: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &rowMaskPB)
-        guard let rowMaskPixelBuffer = rowMaskPB else { return nil }
+        // NOTE: For the row/col kernels we use 1D dispatchs matching the patch HEIGHT and WIDTH respectively,
+        // but we keep using the original kernel semantics (rowScan expects a 1D row index, colScan expects a 1D col index).
 
-        var rowMaskTexRef: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, rowMaskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &rowMaskTexRef)
-        guard let rowMaskTexture = rowMaskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+        // Pre-prepare some values
+        let tRowExecWidth = rowPipe.threadExecutionWidth
+        let tColExecWidth = colPipe.threadExecutionWidth
 
-        // Create column mask texture
-        var colMaskPB: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &colMaskPB)
-        guard let colMaskPixelBuffer = colMaskPB else { return nil }
+        // 2) For each patch: dispatch row and column scans (no waits)
+        encoder.setComputePipelineState(rowPipe)
+        for px in 0..<patchGridWidth {
+            for py in 0..<patchGridHeight {
+                // respect optimization flags
+                if enablePatchOptimization && !patchFlags[px][py] { continue }
 
-        var colMaskTexRef: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, colMaskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &colMaskTexRef)
-        guard let colMaskTexture = colMaskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+                // compute bounds
+                let bounds = getPatchBounds(patchX: px, patchY: py, imageWidth: width, imageHeight: height)
+                let patchMinX = UInt32(bounds.minX)
+                let patchMaxX = UInt32(bounds.maxX)
+                let patchMinY = UInt32(bounds.minY)
+                let patchMaxY = UInt32(bounds.maxY)
+                var params = PatchScanParamsStruct(patchMinX: patchMinX,
+                                                   patchMaxX: patchMaxX,
+                                                   patchMinY: patchMinY,
+                                                   patchMaxY: patchMaxY,
+                                                   rowColSkip: UInt32(max(1, rowColSkip)),
+                                                   thresholdRatio: ratio,
+                                                   patchIndex: UInt32(px * patchGridHeight + py),
+                                                   pad0: 0)
+                // copy params into shared buffer
+                memcpy(paramsBuf.contents(), &params, MemoryLayout<PatchScanParamsStruct>.size)
 
-        // Create output mask texture
-        var outputMaskPB: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, options, &outputMaskPB)
-        guard let outputMaskPixelBuffer = outputMaskPB else { return nil }
+                encoder.setTexture(srcTex, index: 0)
+                encoder.setTexture(rowMaskTex, index: 1)
+                encoder.setBuffer(paramsBuf, offset: 0, index: 0)
 
-        var outputMaskTexRef: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, outputMaskPixelBuffer, nil, .bgra8Unorm, width, height, 0, &outputMaskTexRef)
-        guard let outputMaskTexture = outputMaskTexRef.flatMap(CVMetalTextureGetTexture) else { return nil }
+                // dispatch rows = patchHeight (we supply a 1D grid where "row" parameter is relative row)
+                let patchHeight = Int(bounds.maxY - bounds.minY)
+                if patchHeight <= 0 { continue }
+                let threadsPerGrid = MTLSize(width: patchHeight, height: 1, depth: 1)
+                let threadsPerGroup = MTLSize(width: min(tRowExecWidth, patchHeight), height: 1, depth: 1)
 
-        // Clear all mask textures
-        clearTexture(rowMaskTexture, width: width, height: height, using: clearPipe, queue: queue)
-        clearTexture(colMaskTexture, width: width, height: height, using: clearPipe, queue: queue)
-
-        // Track which patches had edges for flag updates
-        var newPatchFlags = Array(repeating: Array(repeating: false, count: patchGridHeight), count: patchGridWidth)
-
-        // Algorithm 2: Scan only flagged patches
-        for patchX in 0..<patchGridWidth {
-            for patchY in 0..<patchGridHeight {
-                // Skip patches not flagged for search (unless optimization disabled)
-                if enablePatchOptimization && !patchFlags[patchX][patchY] {
-                    continue
+                if supportsNonUniformThreadgroups {
+                    encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+                } else {
+                    let groups = (patchHeight + threadsPerGroup.width - 1) / threadsPerGroup.width
+                    encoder.dispatchThreadgroups(MTLSize(width: groups, height: 1, depth: 1), threadsPerThreadgroup: threadsPerGroup)
                 }
+            }
+        }
 
-                let bounds = getPatchBounds(patchX: patchX, patchY: patchY, imageWidth: width, imageHeight: height)
+        // Column scans
+        encoder.setComputePipelineState(colPipe)
+        for px in 0..<patchGridWidth {
+            for py in 0..<patchGridHeight {
+                if enablePatchOptimization && !patchFlags[px][py] { continue }
 
-                // Scan this patch with row/column skip support
-                scanPatch(
-                    srcTexture: srcTexture,
-                    rowMaskTexture: rowMaskTexture,
-                    colMaskTexture: colMaskTexture,
-                    bounds: bounds,
-                    ratio: ratio,
-                    rowPipe: rowPipe,
-                    colPipe: colPipe,
-                    queue: queue
-                )
+                let bounds = getPatchBounds(patchX: px, patchY: py, imageWidth: width, imageHeight: height)
+                let patchMinX = UInt32(bounds.minX)
+                let patchMaxX = UInt32(bounds.maxX)
+                let patchMinY = UInt32(bounds.minY)
+                let patchMaxY = UInt32(bounds.maxY)
+                var params = PatchScanParamsStruct(patchMinX: patchMinX,
+                                                   patchMaxX: patchMaxX,
+                                                   patchMinY: patchMinY,
+                                                   patchMaxY: patchMaxY,
+                                                   rowColSkip: UInt32(max(1, rowColSkip)),
+                                                   thresholdRatio: ratio,
+                                                   patchIndex: UInt32(px * patchGridHeight + py),
+                                                   pad0: 0)
+                memcpy(paramsBuf.contents(), &params, MemoryLayout<PatchScanParamsStruct>.size)
 
-                // Check if edges were found in this patch
-                let hasEdges = checkPatchHasEdges(
-                    rowMaskTexture: rowMaskTexture,
-                    colMaskTexture: colMaskTexture,
-                    bounds: bounds,
-                    queue: queue,
-                    dev: dev
-                )
+                encoder.setTexture(srcTex, index: 0)
+                encoder.setTexture(colMaskTex, index: 1)
+                encoder.setBuffer(paramsBuf, offset: 0, index: 0)
 
-                if hasEdges {
-                    // Mark this patch and neighbors for next frame
-                    newPatchFlags[patchX][patchY] = true
-                    if enablePatchOptimization {
-                        setNeighborFlags(patchX: patchX, patchY: patchY, in: &newPatchFlags)
+                let patchWidth = Int(bounds.maxX - bounds.minX)
+                if patchWidth <= 0 { continue }
+                let threadsPerGrid = MTLSize(width: patchWidth, height: 1, depth: 1)
+                let threadsPerGroup = MTLSize(width: min(tColExecWidth, patchWidth), height: 1, depth: 1)
+
+                if supportsNonUniformThreadgroups {
+                    encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+                } else {
+                    let groups = (patchWidth + threadsPerGroup.width - 1) / threadsPerGroup.width
+                    encoder.dispatchThreadgroups(MTLSize(width: groups, height: 1, depth: 1), threadsPerThreadgroup: threadsPerGroup)
+                }
+            }
+        }
+
+        // 3) Check patches for any edges: dispatch checkPatchForEdges for each patch (2D dispatch equal to patch size).
+        encoder.setComputePipelineState(checkPipe)
+        encoder.setBuffer(patchFlagsBuf, offset: 0, index: 0) // atomic uint array
+        for px in 0..<patchGridWidth {
+            for py in 0..<patchGridHeight {
+                if enablePatchOptimization && !patchFlags[px][py] { continue }
+
+                let bounds = getPatchBounds(patchX: px, patchY: py, imageWidth: width, imageHeight: height)
+                let patchMinX = UInt32(bounds.minX)
+                let patchMaxX = UInt32(bounds.maxX)
+                let patchMinY = UInt32(bounds.minY)
+                let patchMaxY = UInt32(bounds.maxY)
+                var params = PatchScanParamsStruct(patchMinX: patchMinX,
+                                                   patchMaxX: patchMaxX,
+                                                   patchMinY: patchMinY,
+                                                   patchMaxY: patchMaxY,
+                                                   rowColSkip: UInt32(max(1, rowColSkip)),
+                                                   thresholdRatio: ratio,
+                                                   patchIndex: UInt32(px * patchGridHeight + py),
+                                                   pad0: 0)
+                memcpy(paramsBuf.contents(), &params, MemoryLayout<PatchScanParamsStruct>.size)
+
+                encoder.setTexture(rowMaskTex, index: 0)
+                encoder.setTexture(colMaskTex, index: 1)
+                encoder.setBuffer(paramsBuf, offset: 0, index: 1)
+
+                let patchWidth = Int(bounds.maxX - bounds.minX)
+                let patchHeight = Int(bounds.maxY - bounds.minY)
+                if patchWidth <= 0 || patchHeight <= 0 { continue }
+
+                // reasonable threadgroup size, tune as needed
+                let tpt = MTLSize(width: 8, height: 8, depth: 1)
+                let groupsPatch = MTLSize(width: (patchWidth + tpt.width - 1)/tpt.width,
+                                          height: (patchHeight + tpt.height - 1)/tpt.height,
+                                          depth: 1)
+                encoder.dispatchThreadgroups(groupsPatch, threadsPerThreadgroup: tpt)
+            }
+        }
+
+        // 4) Combine row and column masks into output mask
+        encoder.setComputePipelineState(combinePipe)
+        encoder.setTexture(rowMaskTex, index: 0)
+        encoder.setTexture(colMaskTex, index: 1)
+        encoder.setTexture(outputTex, index: 2)
+        dispatchFullTexture(encoder: encoder, pipe: combinePipe, width: width, height: height)
+
+        encoder.endEncoding()
+
+        // Commit once and wait once (single synchronization)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        // Read back patch flags (single memcopy)
+        var newPatchFlags = Array(repeating: Array(repeating: false, count: patchGridHeight), count: patchGridWidth)
+        if let ptr = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self) {
+            for px in 0..<patchGridWidth {
+                for py in 0..<patchGridHeight {
+                    let idx = px * patchGridHeight + py
+                    if ptr[idx] != 0 {
+                        newPatchFlags[px][py] = true
+                        if enablePatchOptimization {
+                            setNeighborFlags(patchX: px, patchY: py, in: &newPatchFlags)
+                        }
+                    } else {
+                        newPatchFlags[px][py] = false
                     }
                 }
             }
         }
 
-        // Update patch flags for next frame (only if optimization enabled)
-        if enablePatchOptimization {
-            patchFlags = newPatchFlags
-        }
+        if enablePatchOptimization { patchFlags = newPatchFlags }
 
-        // Combine row and column masks
-        guard let combineCmd = queue.makeCommandBuffer(),
-              let combineEncoder = combineCmd.makeComputeCommandEncoder() else { return nil }
-
-        combineEncoder.setComputePipelineState(combinePipe)
-        combineEncoder.setTexture(rowMaskTexture, index: 0)
-        combineEncoder.setTexture(colMaskTexture, index: 1)
-        combineEncoder.setTexture(outputMaskTexture, index: 2)
-
-        let combineThreadsPerGrid = MTLSize(width: width, height: height, depth: 1)
-        let combineThreadExecutionWidth = combinePipe.threadExecutionWidth
-        let combineThreadsPerGroup = MTLSize(width: combineThreadExecutionWidth, height: 1, depth: 1)
-
-        if supportsNonUniformThreadgroups {
-            combineEncoder.dispatchThreads(combineThreadsPerGrid, threadsPerThreadgroup: combineThreadsPerGroup)
+        // Return final CIImage rendered from output pixel buffer
+        if let outPB = outputMaskPixelBuffer {
+            return CIImage(cvPixelBuffer: outPB)
         } else {
-            let groupsW = (width + combineThreadExecutionWidth - 1) / combineThreadExecutionWidth
-            let groupsH = height
-            combineEncoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: 1),
-                                               threadsPerThreadgroup: combineThreadsPerGroup)
+            return nil
         }
-        combineEncoder.endEncoding()
-        combineCmd.commit()
-        combineCmd.waitUntilCompleted()
-
-        return CIImage(cvPixelBuffer: outputMaskPixelBuffer)
     }
 
-    // Helper: Clear a texture using GPU
-    private func clearTexture(_ texture: MTLTexture, width: Int, height: Int, using clearPipe: MTLComputePipelineState, queue: MTLCommandQueue) {
-        guard let cmd = queue.makeCommandBuffer(),
-              let encoder = cmd.makeComputeCommandEncoder() else { return }
-
-        encoder.setComputePipelineState(clearPipe)
-        encoder.setTexture(texture, index: 0)
-
+    // Helper to dispatch kernels covering the whole texture (used for clear and combine)
+    private func dispatchFullTexture(encoder: MTLComputeCommandEncoder, pipe: MTLComputePipelineState, width: Int, height: Int) {
         let threadsPerGrid = MTLSize(width: width, height: height, depth: 1)
-        let threadExecutionWidth = clearPipe.threadExecutionWidth
+        let threadExecutionWidth = pipe.threadExecutionWidth
+        // 1D threadgroup width is fine for these kernels
         let threadsPerGroup = MTLSize(width: threadExecutionWidth, height: 1, depth: 1)
-
         if supportsNonUniformThreadgroups {
             encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         } else {
             let groupsW = (width + threadExecutionWidth - 1) / threadExecutionWidth
             let groupsH = height
             encoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: 1),
-                                        threadsPerThreadgroup: threadsPerGroup)
-        }
-        encoder.endEncoding()
-        cmd.commit()
-        cmd.waitUntilCompleted()
-    }
-
-    // Helper: Scan a single patch with Algorithm 1
-    private func scanPatch(
-        srcTexture: MTLTexture,
-        rowMaskTexture: MTLTexture,
-        colMaskTexture: MTLTexture,
-        bounds: (minX: Int, minY: Int, maxX: Int, maxY: Int),
-        ratio: Float,
-        rowPipe: MTLComputePipelineState,
-        colPipe: MTLComputePipelineState,
-        queue: MTLCommandQueue
-    ) {
-        // Create params struct matching Metal definition
-        struct PatchScanParams {
-            var patchMinX: UInt32
-            var patchMaxX: UInt32
-            var patchMinY: UInt32
-            var patchMaxY: UInt32
-            var rowColSkip: UInt32
-            var thresholdRatio: Float
-        }
-
-        var params = PatchScanParams(
-            patchMinX: UInt32(bounds.minX),
-            patchMaxX: UInt32(bounds.maxX),
-            patchMinY: UInt32(bounds.minY),
-            patchMaxY: UInt32(bounds.maxY),
-            rowColSkip: UInt32(max(1, rowColSkip)),
-            thresholdRatio: ratio
-        )
-
-        // Dispatch row scan for this patch
-        if let rowCmd = queue.makeCommandBuffer(),
-           let rowEncoder = rowCmd.makeComputeCommandEncoder() {
-            rowEncoder.setComputePipelineState(rowPipe)
-            rowEncoder.setTexture(srcTexture, index: 0)
-            rowEncoder.setTexture(rowMaskTexture, index: 1)
-            rowEncoder.setBytes(&params, length: MemoryLayout<PatchScanParams>.size, index: 0)
-
-            let rowThreadsPerGrid = MTLSize(width: bounds.maxY, height: 1, depth: 1)
-            let rowThreadExecutionWidth = rowPipe.threadExecutionWidth
-            let rowThreadsPerGroup = MTLSize(width: min(rowThreadExecutionWidth, bounds.maxY), height: 1, depth: 1)
-
-            if supportsNonUniformThreadgroups {
-                rowEncoder.dispatchThreads(rowThreadsPerGrid, threadsPerThreadgroup: rowThreadsPerGroup)
-            } else {
-                let numGroups = (bounds.maxY + rowThreadsPerGroup.width - 1) / rowThreadsPerGroup.width
-                rowEncoder.dispatchThreadgroups(MTLSize(width: numGroups, height: 1, depth: 1),
-                                               threadsPerThreadgroup: rowThreadsPerGroup)
-            }
-            rowEncoder.endEncoding()
-            rowCmd.commit()
-            rowCmd.waitUntilCompleted()
-        }
-
-        // Dispatch column scan for this patch
-        if let colCmd = queue.makeCommandBuffer(),
-           let colEncoder = colCmd.makeComputeCommandEncoder() {
-            colEncoder.setComputePipelineState(colPipe)
-            colEncoder.setTexture(srcTexture, index: 0)
-            colEncoder.setTexture(colMaskTexture, index: 1)
-            colEncoder.setBytes(&params, length: MemoryLayout<PatchScanParams>.size, index: 0)
-
-            let colThreadsPerGrid = MTLSize(width: bounds.maxX, height: 1, depth: 1)
-            let colThreadExecutionWidth = colPipe.threadExecutionWidth
-            let colThreadsPerGroup = MTLSize(width: min(colThreadExecutionWidth, bounds.maxX), height: 1, depth: 1)
-
-            if supportsNonUniformThreadgroups {
-                colEncoder.dispatchThreads(colThreadsPerGrid, threadsPerThreadgroup: colThreadsPerGroup)
-            } else {
-                let numGroups = (bounds.maxX + colThreadsPerGroup.width - 1) / colThreadsPerGroup.width
-                colEncoder.dispatchThreadgroups(MTLSize(width: numGroups, height: 1, depth: 1),
-                                               threadsPerThreadgroup: colThreadsPerGroup)
-            }
-            colEncoder.endEncoding()
-            colCmd.commit()
-            colCmd.waitUntilCompleted()
+                                         threadsPerThreadgroup: threadsPerGroup)
         }
     }
 
-    // Helper: Check if a patch contains any edges (reads back minimal data)
-    private func checkPatchHasEdges(
-        rowMaskTexture: MTLTexture,
-        colMaskTexture: MTLTexture,
-        bounds: (minX: Int, minY: Int, maxX: Int, maxY: Int),
-        queue: MTLCommandQueue,
-        dev: MTLDevice
-    ) -> Bool {
-        let patchWidth = bounds.maxX - bounds.minX
-        let patchHeight = bounds.maxY - bounds.minY
-
-        // Sample a subset of pixels in the patch to check for edges (optimization)
-        // Check every Nth pixel to avoid full readback
-        let sampleStep = max(1, max(patchWidth, patchHeight) / 10)
-
-        for y in stride(from: bounds.minY, to: bounds.maxY, by: sampleStep) {
-            for x in stride(from: bounds.minX, to: bounds.maxX, by: sampleStep) {
-                let region = MTLRegion(origin: MTLOrigin(x: x, y: y, z: 0),
-                                      size: MTLSize(width: 1, height: 1, depth: 1))
-
-                var rowPixel: [UInt8] = [0, 0, 0, 0]
-                var colPixel: [UInt8] = [0, 0, 0, 0]
-
-                rowMaskTexture.getBytes(&rowPixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
-                colMaskTexture.getBytes(&colPixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
-
-                if rowPixel[0] > 0 || colPixel[0] > 0 {
-                    return true
-                }
-            }
-        }
-
-        return false
-    }
-
-    // MARK: - Helper
+    // MARK: - Public helpers used by app (keeps earlier API)
 
     private func createPixelBuffer(from image: CIImage) -> CVPixelBuffer? {
         let width = Int(image.extent.width)
@@ -680,5 +630,77 @@ class EdgeDetectorGPU {
         guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return nil }
         ciContext.render(image, to: buffer)
         return buffer
+    }
+
+    func detectDepthEdges(from depthMap: CVPixelBuffer) -> CVPixelBuffer? {
+        var ciDepth = CIImage(cvPixelBuffer: depthMap)
+
+        // clamp, downscale, blur (same as original)
+        if let clamp = CIFilter(name: "CIColorClamp", parameters: [
+            kCIInputImageKey: ciDepth,
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 99, y: 99, z: 99, w: 1)
+        ]), let output = clamp.outputImage {
+            ciDepth = output
+        }
+
+        if downscaleFactor < 1.0,
+           let scale = CIFilter(name: "CILanczosScaleTransform", parameters: [
+            kCIInputImageKey: ciDepth,
+            kCIInputScaleKey: downscaleFactor,
+            kCIInputAspectRatioKey: 1.0
+        ]), let out = scale.outputImage {
+            ciDepth = out
+        }
+
+        if preSmoothingRadius > 0.0,
+           let blur = CIFilter(name: "CIGaussianBlur", parameters: [
+            kCIInputImageKey: ciDepth,
+            kCIInputRadiusKey: preSmoothingRadius
+        ]), let out = blur.outputImage {
+            ciDepth = out
+        }
+
+        guard var edgeImage = runGPUScan(depthCIImage: ciDepth, ratio: Float(edgeDetectionThresholdRatio)) else {
+            return nil
+        }
+
+        // Amplify
+        if edgeAmplification > 1.0,
+           let mult = CIFilter(name: "CIColorMatrix", parameters: [
+            kCIInputImageKey: edgeImage,
+            "inputRVector": CIVector(x: edgeAmplification, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: edgeAmplification, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: edgeAmplification, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ]), let out = mult.outputImage {
+            edgeImage = out
+        }
+
+        // Threshold
+        if enableThresholding && edgeThreshold > 0.0,
+           let clamp = CIFilter(name: "CIColorClamp", parameters: [
+            kCIInputImageKey: edgeImage,
+            "inputMinComponents": CIVector(x: edgeThreshold, y: edgeThreshold, z: edgeThreshold, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ]), let out = clamp.outputImage {
+            edgeImage = out
+        }
+
+        return createPixelBuffer(from: edgeImage)
+    }
+
+    // MARK: - Structs & small helpers
+
+    // Mirror of the MSL PatchScanParams layout (keep 16-byte alignment)
+    private struct PatchScanParamsStruct {
+        var patchMinX: UInt32
+        var patchMaxX: UInt32
+        var patchMinY: UInt32
+        var patchMaxY: UInt32
+        var rowColSkip: UInt32
+        var thresholdRatio: Float
+        var patchIndex: UInt32
+        var pad0: UInt32
     }
 }
