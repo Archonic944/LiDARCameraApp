@@ -716,7 +716,7 @@ class EdgeDetectorGPU {
         // Connect nearby pixels and thicken lines
         if let morphology = CIFilter(name: "CIMorphologyMaximum", parameters: [
             kCIInputImageKey: edgeImage,
-            kCIInputRadiusKey: 1.5
+            kCIInputRadiusKey: 2.5
         ]), let out = morphology.outputImage {
             edgeImage = out
         }
