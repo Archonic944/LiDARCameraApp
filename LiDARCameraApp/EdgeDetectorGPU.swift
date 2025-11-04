@@ -54,8 +54,11 @@ class EdgeDetectorGPU {
     private var houghPeakFinderPipeline: MTLComputePipelineState?
     private var houghLineDrawingPipeline: MTLComputePipelineState?
 
-    private var houghAccumulatorTexture: MTLTexture?
-    private var detectedLinesBuffer: MTLBuffer?
+        private var houghAccumulatorBuffer: MTLBuffer?
+
+    
+
+        private var detectedLinesBuffer: MTLBuffer?
     private var sinCosTableBuffer: MTLBuffer?
     private var houghParamsBuffer: MTLBuffer?
 
@@ -191,7 +194,7 @@ class EdgeDetectorGPU {
                     if ((lastV - d) > thresh) {
                         rowMaskTex.write(float4(1.0), uint2(x, globalRow));
                     } else if ((d - lastV) > thresh) {
-                        rowMaskTex.write(float4(1.0), uint2(lastX, globalRow));
+                        rowMaskTex.write(float4(1.0), uint2(uint(lastX), globalRow));
                     }
                 }
                 lastX = int(x);
@@ -222,7 +225,7 @@ class EdgeDetectorGPU {
                     if ((lastV - d) > thresh) {
                         colMaskTex.write(float4(1.0), uint2(globalCol, y));
                     } else if ((d - lastV) > thresh) {
-                        colMaskTex.write(float4(1.0), uint2(globalCol, lastY));
+                        colMaskTex.write(float4(1.0), uint2(globalCol, uint(lastY)));
                     }
                 }
                 lastY = int(y);
@@ -291,16 +294,17 @@ class EdgeDetectorGPU {
     // Kernel to build the Hough accumulator
     kernel void houghAccumulator(
         texture2d<float, access::read> edgeTex [[texture(0)]],
-        texture2d<atomic_uint, access::read_write> accumulator [[texture(1)]],
-        constant float *sinCosTable [[buffer(0)]], // precomputed sin/cos table
+        device atomic_uint* accumulator [[buffer(0)]],
+        constant float *sinCosTable [[buffer(1)]],
+        constant uint *houghParams [[buffer(2)]], // [0]=rhoRes, [1]=thetaRes
         uint2 gid [[thread_position_in_grid]]
     ) {
         if (edgeTex.read(gid).r <= 0.0f) {
             return; // Not an edge pixel
         }
 
-        uint thetaRes = accumulator.get_width();
-        uint rhoRes = accumulator.get_height();
+        uint rhoRes = houghParams[0];
+        uint thetaRes = houghParams[1];
 
         float maxRho = sqrt(pow(float(edgeTex.get_width()), 2.0) + pow(float(edgeTex.get_height()), 2.0));
         float rhoStep = (2.0 * maxRho) / float(rhoRes);
@@ -316,37 +320,43 @@ class EdgeDetectorGPU {
             uint rhoIdx = uint((rho + maxRho) / rhoStep);
 
             if (rhoIdx < rhoRes) {
-                atomic_fetch_add_explicit(&accumulator.get_access_control_texture()[uint2(thetaIdx, rhoIdx)], 1u, memory_order_relaxed);
+                uint accum_idx = rhoIdx * thetaRes + thetaIdx;
+                atomic_fetch_add_explicit(&accumulator[accum_idx], 1u, memory_order_relaxed);
             }
         }
     }
 
     // Kernel to find peaks (lines) in the accumulator
     kernel void houghPeakFinder(
-        texture2d<atomic_uint, access::read> accumulator [[texture(0)]],
-        device HoughLine *lines [[buffer(0)]],
-        device atomic_uint *lineCount [[buffer(1)]],
-        constant uint *peakThreshold [[buffer(2)]],
+        device atomic_uint* accumulator [[buffer(0)]],
+        device HoughLine *lines [[buffer(1)]],
+        device atomic_uint *lineCount [[buffer(2)]],
+        constant uint *houghParams [[buffer(3)]], // [0]=rhoRes, [1]=thetaRes, [2]=peakThreshold
         uint2 gid [[thread_position_in_grid]]
     ) {
-        uint width = accumulator.get_width();
-        uint height = accumulator.get_height();
-        if (gid.x >= width || gid.y >= height) return;
+        uint rhoRes = houghParams[0];
+        uint thetaRes = houghParams[1];
+        uint peakThreshold = houghParams[2];
 
-        uint votes = atomic_load_explicit(&accumulator.get_access_control_texture()[gid], memory_order_relaxed);
+        if (gid.x >= thetaRes || gid.y >= rhoRes) return;
 
-        if (votes < *peakThreshold) {
+        uint current_idx = gid.y * thetaRes + gid.x;
+        uint votes = atomic_load_explicit(&accumulator[current_idx], memory_order_relaxed);
+
+        if (votes < peakThreshold) {
             return;
         }
 
         // Simple non-maximum suppression
         bool isPeak = true;
-        for (int dx = -2; dx <= 2; ++dx) {
-            for (int dy = -2; dy <= 2; ++dy) {
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
                 if (dx == 0 && dy == 0) continue;
                 int2 n = int2(gid) + int2(dx, dy);
-                if (n.x >= 0 && n.x < width && n.y >= 0 && n.y < height) {
-                    if (atomic_load_explicit(&accumulator.get_access_control_texture()[uint2(n)], memory_order_relaxed) > votes) {
+
+                if (n.x >= 0 && uint(n.x) < thetaRes && n.y >= 0 && uint(n.y) < rhoRes) {
+                    uint neighbor_idx = uint(n.y) * thetaRes + uint(n.x);
+                    if (atomic_load_explicit(&accumulator[neighbor_idx], memory_order_relaxed) > votes) {
                         isPeak = false;
                         break;
                     }
@@ -511,14 +521,9 @@ class EdgeDetectorGPU {
         patchFlagBuffer = dev.makeBuffer(length: flagSize, options: .storageModeShared)
 
         // Hough Transform resources
-        if houghAccumulatorTexture == nil || houghAccumulatorTexture?.width != houghThetaResolution || houghAccumulatorTexture?.height != houghRhoResolution {
-            let accumulatorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .r32Uint, // Use atomic integer format
-                width: houghThetaResolution,
-                height: houghRhoResolution,
-                mipmapped: false)
-            accumulatorDescriptor.usage = [.shaderRead, .shaderWrite]
-            houghAccumulatorTexture = dev.makeTexture(descriptor: accumulatorDescriptor)
+        let accumulatorSize = houghThetaResolution * houghRhoResolution * MemoryLayout<UInt32>.stride
+        if houghAccumulatorBuffer == nil || houghAccumulatorBuffer?.length != accumulatorSize {
+            houghAccumulatorBuffer = dev.makeBuffer(length: accumulatorSize, options: .storageModePrivate)
         }
 
         if detectedLinesBuffer == nil {
@@ -931,169 +936,351 @@ class EdgeDetectorGPU {
 
         
 
-                // --- HOUGH TRANSFORM PIPELINE ---
-
-                guard let dev = metalDevice,
-
-                      let queue = metalCommandQueue,
-
-                      let houghAccumPipe = houghAccumulatorPipeline,
-
-                      let houghPeakPipe = houghPeakFinderPipeline,
-
-                      let houghLinePipe = houghLineDrawingPipeline,
-
-                      let clearPipe = clearPipeline else {
-
-                    return createPixelBuffer(from: edgeImage) // Fallback to showing the edge mask
-
-                }
+                        // --- HOUGH TRANSFORM PIPELINE ---
 
         
 
-                let width = Int(edgeImage.extent.width)
-
-                let height = Int(edgeImage.extent.height)
-
-                guard ensureResources(width: width, height: height),
-
-                      let accumulatorTex = houghAccumulatorTexture,
-
-                      let linesBuf = detectedLinesBuffer,
-
-                      let sinCosBuf = sinCosTableBuffer,
-
-                      let paramsBuf = houghParamsBuffer,
-
-                      let outputPB = outputMaskPixelBuffer, // Reuse output buffer from main pipeline
-
-                      let outputTex = outputMaskTexture else {
-
-                    return createPixelBuffer(from: edgeImage)
-
-                }
+                        guard let dev = metalDevice,
 
         
 
-                // Get a texture for the input edge mask
-
-                let textureDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: width, height: height, mipmapped: false)
-
-                textureDesc.usage = [.shaderRead, .shaderWrite]
-
-                guard let edgeMaskTex = dev.makeTexture(descriptor: textureDesc) else { return nil }
+                              let queue = metalCommandQueue,
 
         
 
-                // --- Main Hough Compute Pass ---
-
-                guard let cmdBuf = queue.makeCommandBuffer(),
-
-                      let encoder = cmdBuf.makeComputeCommandEncoder() else { return nil }
+                              let houghAccumPipe = houghAccumulatorPipeline,
 
         
 
-                // 0. Render CIImage mask to our input texture
-
-                ciContext.render(edgeImage, to: edgeMaskTex, commandBuffer: cmdBuf, bounds: edgeImage.extent, colorSpace: CGColorSpaceCreateDeviceGray())
+                              let houghPeakPipe = houghPeakFinderPipeline,
 
         
 
-                // 1. Clear accumulator & output
+                              let houghLinePipe = houghLineDrawingPipeline,
 
-                encoder.setComputePipelineState(clearPipe)
+        
 
-                encoder.setTexture(accumulatorTex, index: 0)
+                              let clearPipe = clearPipeline else {
 
-                var accumThreads = MTLSize(width: accumulatorTex.width, height: accumulatorTex.height, depth: 1)
+        
 
-                var accumGroup = MTLSize(width: 8, height: 8, depth: 1)
+                            return createPixelBuffer(from: edgeImage) // Fallback to showing the edge mask
 
-                encoder.dispatchThreadgroups(MTLSize(width: (accumThreads.width + accumGroup.width - 1) / accumGroup.width, height: (accumThreads.height + accumGroup.height - 1) / accumGroup.height, depth: 1), threadsPerThreadgroup: accumGroup)
+        
+
+                        }
+
+        
 
                 
 
-                encoder.setTexture(outputTex, index: 0)
+        
 
-                dispatchFullTexture(encoder: encoder, pipe: clearPipe, width: width, height: height)
+                        let width = Int(edgeImage.extent.width)
 
         
 
-                // 2. Build Hough accumulator
-
-                encoder.setComputePipelineState(houghAccumPipe)
-
-                encoder.setTexture(edgeMaskTex, index: 0)
-
-                encoder.setTexture(accumulatorTex, index: 1)
-
-                encoder.setBuffer(sinCosBuf, offset: 0, index: 0)
-
-                dispatchFullTexture(encoder: encoder, pipe: houghAccumPipe, width: width, height: height)
+                        let height = Int(edgeImage.extent.height)
 
         
 
-                // 3. Find peaks
+                        guard ensureResources(width: width, height: height),
 
-                let lineCountBuffer = dev.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)!
+        
 
-                lineCountBuffer.contents().assumingMemoryBound(to: UInt32.self).pointee = 0
+                              let accumulatorBuf = houghAccumulatorBuffer,
 
-                var peakThresh: UInt32 = UInt32(houghPeakThreshold)
+        
+
+                              let linesBuf = detectedLinesBuffer,
+
+        
+
+                              let sinCosBuf = sinCosTableBuffer,
+
+        
+
+                              let paramsBuf = houghParamsBuffer,
+
+        
+
+                              let outputPB = outputMaskPixelBuffer, // Reuse output buffer from main pipeline
+
+        
+
+                              let outputTex = outputMaskTexture else {
+
+        
+
+                            return createPixelBuffer(from: edgeImage)
+
+        
+
+                        }
+
+        
 
                 
 
-                encoder.setComputePipelineState(houghPeakPipe)
+        
 
-                encoder.setTexture(accumulatorTex, index: 0)
-
-                encoder.setBuffer(linesBuf, offset: 0, index: 0)
-
-                encoder.setBuffer(lineCountBuffer, offset: 0, index: 1)
-
-                encoder.setBytes(&peakThresh, length: MemoryLayout<UInt32>.stride, index: 2)
-
-                accumThreads = MTLSize(width: accumulatorTex.width, height: accumulatorTex.height, depth: 1)
-
-                accumGroup = MTLSize(width: 8, height: 8, depth: 1)
-
-                encoder.dispatchThreadgroups(MTLSize(width: (accumThreads.width + accumGroup.width - 1) / accumGroup.width, height: (accumThreads.height + accumGroup.height - 1) / accumGroup.height, depth: 1), threadsPerThreadgroup: accumGroup)
+                        // Get a texture for the input edge mask
 
         
 
-                // 4. Draw lines
-
-                var houghP: [UInt32] = [UInt32(houghRhoResolution), UInt32(houghThetaResolution)]
-
-                paramsBuf.contents().copyMemory(from: &houghP, byteCount: houghP.count * MemoryLayout<UInt32>.stride)
+                        let textureDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: width, height: height, mipmapped: false)
 
         
 
-                encoder.setComputePipelineState(houghLinePipe)
-
-                encoder.setTexture(outputTex, index: 0)
-
-                encoder.setBuffer(linesBuf, offset: 0, index: 0)
-
-                encoder.setBuffer(lineCountBuffer, offset: 0, index: 1)
-
-                encoder.setBuffer(sinCosBuf, offset: 0, index: 2)
-
-                encoder.setBuffer(paramsBuf, offset: 0, index: 3)
-
-                dispatchFullTexture(encoder: encoder, pipe: houghLinePipe, width: width, height: height)
+                        textureDesc.usage = [.shaderRead, .shaderWrite]
 
         
 
-                encoder.endEncoding()
-
-                cmdBuf.commit()
-
-                cmdBuf.waitUntilCompleted()
+                        guard let edgeMaskTex = dev.makeTexture(descriptor: textureDesc) else { return nil }
 
         
 
-                return outputPB
+                
+
+        
+
+                        // --- Main Hough Compute Pass ---
+
+        
+
+                        guard let cmdBuf = queue.makeCommandBuffer() else { return nil }
+
+        
+
+                
+
+        
+
+                        // 0. Render CIImage mask to our input texture
+
+        
+
+                        ciContext.render(edgeImage, to: edgeMaskTex, commandBuffer: cmdBuf, bounds: edgeImage.extent, colorSpace: CGColorSpaceCreateDeviceGray())
+
+        
+
+                        
+
+        
+
+                        // 1. Clear accumulator buffer
+
+        
+
+                        guard let blitEncoder = cmdBuf.makeBlitCommandEncoder() else { return nil }
+
+        
+
+                        blitEncoder.fill(buffer: accumulatorBuf, range: 0..<accumulatorBuf.length, value: 0)
+
+        
+
+                        blitEncoder.endEncoding()
+
+        
+
+                
+
+        
+
+                        // Start compute encoding
+
+        
+
+                        guard let encoder = cmdBuf.makeComputeCommandEncoder() else { return nil }
+
+        
+
+                
+
+        
+
+                        // Clear output texture
+
+        
+
+                        encoder.setComputePipelineState(clearPipe)
+
+        
+
+                        encoder.setTexture(outputTex, index: 0)
+
+        
+
+                        dispatchFullTexture(encoder: encoder, pipe: clearPipe, width: width, height: height)
+
+        
+
+                
+
+        
+
+                        // 2. Build Hough accumulator
+
+        
+
+                        var houghP1: [UInt32] = [UInt32(houghRhoResolution), UInt32(houghThetaResolution)]
+
+        
+
+                        paramsBuf.contents().copyMemory(from: &houghP1, byteCount: houghP1.count * MemoryLayout<UInt32>.stride)
+
+        
+
+                
+
+        
+
+                        encoder.setComputePipelineState(houghAccumPipe)
+
+        
+
+                        encoder.setTexture(edgeMaskTex, index: 0)
+
+        
+
+                        encoder.setBuffer(accumulatorBuf, offset: 0, index: 0)
+
+        
+
+                        encoder.setBuffer(sinCosBuf, offset: 0, index: 1)
+
+        
+
+                        encoder.setBuffer(paramsBuf, offset: 0, index: 2)
+
+        
+
+                        dispatchFullTexture(encoder: encoder, pipe: houghAccumPipe, width: width, height: height)
+
+        
+
+                
+
+        
+
+                        // 3. Find peaks
+
+        
+
+                        let lineCountBuffer = dev.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)!
+
+        
+
+                        lineCountBuffer.contents().assumingMemoryBound(to: UInt32.self).pointee = 0
+
+        
+
+                        
+
+        
+
+                        var houghP2: [UInt32] = [UInt32(houghRhoResolution), UInt32(houghThetaResolution), UInt32(houghPeakThreshold)]
+
+        
+
+                        let paramsBuf2 = dev.makeBuffer(bytes: &houghP2, length: houghP2.count * MemoryLayout<UInt32>.stride, options: .storageModeShared)!
+
+        
+
+                
+
+        
+
+                        encoder.setComputePipelineState(houghPeakPipe)
+
+        
+
+                        encoder.setBuffer(accumulatorBuf, offset: 0, index: 0)
+
+        
+
+                        encoder.setBuffer(linesBuf, offset: 0, index: 1)
+
+        
+
+                        encoder.setBuffer(lineCountBuffer, offset: 0, index: 2)
+
+        
+
+                        encoder.setBuffer(paramsBuf2, offset: 0, index: 3)
+
+        
+
+                        let accumThreads = MTLSize(width: houghThetaResolution, height: houghRhoResolution, depth: 1)
+
+        
+
+                        let accumGroup = MTLSize(width: 8, height: 8, depth: 1)
+
+        
+
+                        encoder.dispatchThreadgroups(MTLSize(width: (accumThreads.width + accumGroup.width - 1) / accumGroup.width, height: (accumThreads.height + accumGroup.height - 1) / accumGroup.height, depth: 1), threadsPerThreadgroup: accumGroup)
+
+        
+
+                
+
+        
+
+                        // 4. Draw lines
+
+        
+
+                        encoder.setComputePipelineState(houghLinePipe)
+
+        
+
+                        encoder.setTexture(outputTex, index: 0)
+
+        
+
+                        encoder.setBuffer(linesBuf, offset: 0, index: 0)
+
+        
+
+                        encoder.setBuffer(lineCountBuffer, offset: 0, index: 1)
+
+        
+
+                        encoder.setBuffer(sinCosBuf, offset: 0, index: 2)
+
+        
+
+                        encoder.setBuffer(paramsBuf, offset: 0, index: 3) // Re-uses houghP1
+
+        
+
+                        dispatchFullTexture(encoder: encoder, pipe: houghLinePipe, width: width, height: height)
+
+        
+
+                
+
+        
+
+                        encoder.endEncoding()
+
+        
+
+                        cmdBuf.commit()
+
+        
+
+                        cmdBuf.waitUntilCompleted()
+
+        
+
+                
+
+        
+
+                        return outputPB
     }
 
     // MARK: - Structs & small helpers
