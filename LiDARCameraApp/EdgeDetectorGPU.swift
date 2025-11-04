@@ -403,6 +403,16 @@ class EdgeDetectorGPU {
             cmdBuf.waitUntilCompleted() // unavoidable to have srcTexture content before compute
         }
 
+        // Debug: Sample source depth texture to verify depth data is present
+        #if DEBUG
+        if let srcT = srcTexture {
+            let region = MTLRegion(origin: MTLOrigin(x: width/2, y: height/2, z: 0), size: MTLSize(width: 1, height: 1, depth: 1))
+            var depthPixel: Float = 0.0
+            srcT.getBytes(&depthPixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
+            print("🔍 Source depth at center: \(depthPixel) meters")
+        }
+        #endif
+
         // Zero-out patch flags buffer on CPU quickly (we will use GPU to set flags)
         let patchCount = patchGridWidth * patchGridHeight
         let ptrZero = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self)
@@ -584,12 +594,40 @@ class EdgeDetectorGPU {
 
         if enablePatchOptimization { patchFlags = newPatchFlags }
 
-        // Return final CIImage rendered from output pixel buffer
-        if let outPB = outputMaskPixelBuffer {
-            return CIImage(cvPixelBuffer: outPB)
-        } else {
-            return nil
+        // Debug: Check if any edges were detected
+        #if DEBUG
+        let debugPtr = patchFlagsBuf.contents().assumingMemoryBound(to: UInt32.self)
+        var totalEdgePatches = 0
+        for i in 0..<patchCount {
+            if debugPtr[i] != 0 { totalEdgePatches += 1 }
         }
+        print("🔍 EdgeDetectorGPU: \(totalEdgePatches)/\(patchCount) patches have edges, size=\(width)x\(height)")
+
+        // Sample a few pixels from output texture to verify data
+        if let outTex = outputMaskTexture {
+            let region = MTLRegion(origin: MTLOrigin(x: width/2, y: height/2, z: 0), size: MTLSize(width: 1, height: 1, depth: 1))
+            var pixel: [UInt8] = [0, 0, 0, 0]
+            outTex.getBytes(&pixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
+            print("🔍 Center pixel BGRA: \(pixel)")
+        }
+        #endif
+
+        // Convert BGRA output to single-channel float for pipeline compatibility
+        // The output texture is BGRA8, but downstream expects OneComponent32Float
+        guard let outPB = outputMaskPixelBuffer else { return nil }
+        let ciOutput = CIImage(cvPixelBuffer: outPB)
+
+        // Extract red channel and scale from 0-255 byte range to 0-1 float range
+        // BGRA8Unorm already normalizes, but we need to ensure proper channel extraction
+        let extractedChannel = ciOutput.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ])
+
+        return extractedChannel
     }
 
     // Helper to dispatch kernels covering the whole texture
