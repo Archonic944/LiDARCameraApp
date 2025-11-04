@@ -723,11 +723,12 @@ class EdgeDetectorGPU {
 
         // Binarize the image to be strictly 0.0 or 1.0
         // This is done by amplifying the signal massively, then clamping back to the 0-1 range.
+        // All RGB channels must be amplified equally so downstream CIFalseColor reads luminance = 1.0 for edges
         if let binarize = CIFilter(name: "CIColorMatrix", parameters: [
             kCIInputImageKey: edgeImage,
             "inputRVector": CIVector(x: 999, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0), // Zero out other channels
-            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 999, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 999, w: 0),
             "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
         ]), let clamp = CIFilter(name: "CIColorClamp", parameters: [
             kCIInputImageKey: binarize.outputImage,
