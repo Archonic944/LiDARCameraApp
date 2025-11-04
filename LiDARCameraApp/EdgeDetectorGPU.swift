@@ -721,11 +721,19 @@ class EdgeDetectorGPU {
             edgeImage = out
         }
 
-        // Clamp to 0 or 1
-        if let posterize = CIFilter(name: "CIColorPosterize", parameters: [
+        // Binarize the image to be strictly 0.0 or 1.0
+        // This is done by amplifying the signal massively, then clamping back to the 0-1 range.
+        if let binarize = CIFilter(name: "CIColorMatrix", parameters: [
             kCIInputImageKey: edgeImage,
-            "inputLevels": 2
-        ]), let out = posterize.outputImage {
+            "inputRVector": CIVector(x: 999, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0), // Zero out other channels
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ]), let clamp = CIFilter(name: "CIColorClamp", parameters: [
+            kCIInputImageKey: binarize.outputImage,
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ]), let out = clamp.outputImage {
             edgeImage = out
         }
 
