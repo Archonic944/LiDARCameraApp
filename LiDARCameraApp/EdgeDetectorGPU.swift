@@ -62,7 +62,7 @@ class EdgeDetectorGPU {
     private var houghParamsBuffer: MTLBuffer?
 
     // Hough parameters
-    var houghThetaResolution: Int = 50 // Number of angles to check
+    var houghThetaResolution: Int = 1 // Number of angles to check
     var houghRhoResolution: Int = 250   // Resolution of the distance parameter
     var houghPeakThreshold: Int = 30   // Min votes to be considered a line
     var houghLineThickness: Float = 2.0 // Thickness for line drawing (in pixels)
