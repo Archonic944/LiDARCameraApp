@@ -62,19 +62,19 @@ class EdgeDetectorGPU {
     private var houghParamsBuffer: MTLBuffer?
 
     // Hough parameters
-    var houghThetaResolution: Int = 180 // Number of angles to check
-    var houghRhoResolution: Int = 400   // Resolution of the distance parameter
-    var houghPeakThreshold: Int = 100   // Min votes to be considered a line
+    var houghThetaResolution: Int = 50 // Number of angles to check
+    var houghRhoResolution: Int = 250   // Resolution of the distance parameter
+    var houghPeakThreshold: Int = 30   // Min votes to be considered a line
     var houghLineThickness: Float = 2.0 // Thickness for line drawing (in pixels)
 
 
     // MARK: - Customizable Parameters
 
-    var edgeDetectionThresholdRatio: CGFloat = 0.2 // Baseline, physical threshold for physical sensitivity of the detector. Higher = less sensitive
+    var edgeDetectionThresholdRatio: CGFloat = 0.1 // Baseline, physical threshold for physical sensitivity of the detector. Higher = less sensitive
     var edgeAmplification: CGFloat = 2.5
-    var edgeThreshold: CGFloat = 0.4 // Threshold for simple post-processing cleanup
+    var edgeThreshold: CGFloat = 0.3 // Threshold for simple post-processing cleanup
     var enableThresholding: Bool = true
-    var preSmoothingRadius: CGFloat = 0.5
+    var preSmoothingRadius: CGFloat = 0.25
     var downscaleFactor: CGFloat = 0.8
 
     // MARK: - Algorithm 2 Parameters (Patch-based Temporal Coherence)
@@ -82,7 +82,7 @@ class EdgeDetectorGPU {
     var enablePatchOptimization: Bool = true
     var patchGridWidth: Int = 32
     var patchGridHeight: Int = 24
-    var randomSearchRate: CGFloat = 0.15 // How many of the patches are scanned each frame
+    var randomSearchRate: CGFloat = 0.2 // How many of the patches are scanned each frame
     var rowColSkip: Int = 1
 
     // MARK: - Temporal State
@@ -1216,12 +1216,6 @@ class EdgeDetectorGPU {
 
                         encoder.dispatchThreadgroups(MTLSize(width: (accumThreads.width + accumGroup.width - 1) / accumGroup.width, height: (accumThreads.height + accumGroup.height - 1) / accumGroup.height, depth: 1), threadsPerThreadgroup: accumGroup)
 
-        
-
-                
-
-        
-
                         // 4. Draw lines (only where edges exist)
                         var houghP3: [UInt32] = [
 
@@ -1248,22 +1242,6 @@ class EdgeDetectorGPU {
                         cmdBuf.commit()
 
                         cmdBuf.waitUntilCompleted()
-
-                        // Mirror final output horizontally and vertically in-place
-                        do {
-                            let finalCI = CIImage(cvPixelBuffer: outputPB)
-                            let w = finalCI.extent.width
-                            let h = finalCI.extent.height
-                            let mirrored = finalCI.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: w, y: h))
-                            ciContext.render(mirrored, to: outputPB)
-                        }
-
-        
-
-                
-
-        
-
                         return outputPB
     }
 
