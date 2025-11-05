@@ -7,6 +7,8 @@
 //  - Algorithm 1 (P_Scan): Row and column depth discontinuity scanning
 //  - Algorithm 2 (Occluding_Edge_Detection): Patch-based temporal coherence optimization
 //
+//  Based on the edge map, a hough transform is applied to turn edges into straight lines.
+//
 
 import Foundation
 import CoreImage
@@ -42,9 +44,6 @@ class EdgeDetectorGPU {
 
     // Persistent small GPU buffer: one uint per patch indicating "has edge"
     private var patchFlagBuffer: MTLBuffer?
-
-
-
     // Keep last size to detect resize
     private var lastTextureWidth: Int = 0
     private var lastTextureHeight: Int = 0
@@ -557,9 +556,6 @@ class EdgeDetectorGPU {
             sinCosTableBuffer = dev.makeBuffer(bytes: table, length: table.count * MemoryLayout<Float>.stride, options: .storageModeShared)
         }
 
-
-
-
         return true
     }
 
@@ -942,20 +938,9 @@ class EdgeDetectorGPU {
                     edgeImage = out
 
                 }
-
-        
-
                         // --- HOUGH TRANSFORM PIPELINE ---
-
-        
-
                         guard let dev = metalDevice,
-
-        
-
                               let queue = metalCommandQueue,
-
-        
 
                               let houghAccumPipe = houghAccumulatorPipeline,
 
@@ -1238,9 +1223,6 @@ class EdgeDetectorGPU {
         
 
                         // 4. Draw lines (only where edges exist)
-
-
-
                         var houghP3: [UInt32] = [
 
                             UInt32(houghRhoResolution),
@@ -1252,54 +1234,29 @@ class EdgeDetectorGPU {
                         ]
 
                         let paramsBuf3 = dev.makeBuffer(bytes: &houghP3, length: houghP3.count * MemoryLayout<UInt32>.stride, options: .storageModeShared)!
-
-
-
                         encoder.setComputePipelineState(houghLinePipe)
-
-
-
                         encoder.setTexture(edgeMaskTex, index: 0) // Input: edge mask
-
-
-
                         encoder.setTexture(outputTex, index: 1)    // Output: lines
-
-
-
                         encoder.setBuffer(linesBuf, offset: 0, index: 0)
-
-
-
                         encoder.setBuffer(lineCountBuffer, offset: 0, index: 1)
-
-
-
                         encoder.setBuffer(sinCosBuf, offset: 0, index: 2)
-
-
-
                         encoder.setBuffer(paramsBuf3, offset: 0, index: 3)
-
-
-
                         dispatchFullTexture(encoder: encoder, pipe: houghLinePipe, width: width, height: height)
-
-        
-
-                
-
-        
 
                         encoder.endEncoding()
 
-        
-
                         cmdBuf.commit()
 
-        
-
                         cmdBuf.waitUntilCompleted()
+
+                        // Mirror final output horizontally and vertically in-place
+                        do {
+                            let finalCI = CIImage(cvPixelBuffer: outputPB)
+                            let w = finalCI.extent.width
+                            let h = finalCI.extent.height
+                            let mirrored = finalCI.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: w, y: h))
+                            ciContext.render(mirrored, to: outputPB)
+                        }
 
         
 
