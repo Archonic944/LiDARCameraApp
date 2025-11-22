@@ -1,12 +1,10 @@
 //
-// EdgeDetectorGPU.swift
+//  EdgeDetectorGPU.swift
+//  LiDARCameraApp
 //
-// Implements Bose et al. (2017), "Fast RGB-D Edge Detection for SLAM"
-// - Algorithm 1 (P_Scan): Row and column depth discontinuity scanning.
-// - Algorithm 2 (Occluding_Edge_Detection): Patch-based temporal coherence optimization.
-//
-// NOTE: For simplicity and portability, the Metal shader source is included directly
-// as a string constant within the Swift file.
+//  Implements Bose et al. (2017), "Fast RGB-D Edge Detection for SLAM"
+//  - Algorithm 1 (P_Scan): Row and column depth discontinuity scanning.
+//  - Algorithm 2 (Occluding_Edge_Detection): Patch-based temporal coherence optimization.
 //
 
 import Foundation
@@ -31,7 +29,7 @@ class EdgeDetectorGPU {
     var rowColSkipK: Int = 1
     
     // rand_search (Eq 1). Percentage of patches randomly searched each frame.
-    var randomSearchRatio: Float = 0.05
+    var randomSearchRatio: Float = 0.08
 
     // MARK: - Metal Resources
     private let device: MTLDevice
@@ -41,6 +39,11 @@ class EdgeDetectorGPU {
     private var pipelineRowScan: MTLComputePipelineState?
     private var pipelineColScan: MTLComputePipelineState?
     private var pipelineClear: MTLComputePipelineState?
+    
+    // Helper to render textures to CVPixelBuffers
+    private lazy var ciContext: CIContext = {
+        return CIContext(mtlDevice: self.device)
+    }()
 
     // MARK: - Algorithm State
     
@@ -128,6 +131,7 @@ class EdgeDetectorGPU {
                     float diff = v_last_valid - v_n;
                     
                     // Logic from Source [54] and [64]: Edge is the pixel with smaller depth value (closer).
+                    // We write 1.0 to the R channel (which is the only channel in R32Float)
                     if (diff > threshold) {
                         // V_last_valid > V_n. V_n is smaller (closer), so V_n is the edge.
                         edgeTex.write(float4(1.0, 0, 0, 1), coords);
@@ -316,9 +320,8 @@ class EdgeDetectorGPU {
         // 5. Algorithm 2: Read back counts and update flags for the NEXT frame
         updateNextFrameFlags(from: countsBuf)
         
-        // In a real application, you would convert the outputTexture (BGRA8Unorm)
-        // back to a CVPixelBuffer or CIImage for display/further processing.
-        return nil // Placeholder, replace with texture-to-CVPixelBuffer logic
+        // Convert the GPU texture to a CVPixelBuffer for the visualizer
+        return convertTextureToPixelBuffer(texture: outputTexture)
     }
     
     // MARK: - Algorithm 2 Logic Helpers
@@ -422,18 +425,48 @@ class EdgeDetectorGPU {
         return nil
     }
     
-    // Creates the output edge mask texture (BGRA8Unorm for visual output)
+    // Creates the output edge mask texture using R32Float for compatibility with DepthVisualizer
     private func createOutputTexture(width: Int, height: Int) -> MTLTexture? {
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: width, height: height, mipmapped: false)
         desc.usage = [.shaderWrite, .shaderRead]
         return device.makeTexture(descriptor: desc)
     }
     
-    // Placeholder function: In a working app, this converts the GPU output back to
-    // a format usable by UIKit/AppKit (e.g., CVPixelBuffer).
+    // Converts the final Metal texture into a CVPixelBuffer using CIContext
     private func convertTextureToPixelBuffer(texture: MTLTexture) -> CVPixelBuffer? {
-        // Implementation omitted for brevity. You would typically use a blit encoder
-        // or Core Image to copy/convert the MTLTexture data to a CVPixelBuffer.
-        return nil
+        // Create a CIImage from the MTLTexture
+        // .r32Float texture creates a single-channel CIImage
+        guard let ciImage = CIImage(mtlTexture: texture, options: nil)?.oriented(.up) else {
+            return nil
+        }
+        
+        let width = texture.width
+        let height = texture.height
+        
+        var pixelBuffer: CVPixelBuffer?
+        
+        // We MUST use OneComponent32Float so DepthVisualizer sees luminance=1.0
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ]
+        
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_OneComponent32Float, // Matches depth data format
+            attributes as CFDictionary,
+            &pixelBuffer
+        )
+        
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
+            return nil
+        }
+        
+        // Render the CIImage into the CVPixelBuffer
+        ciContext.render(ciImage, to: buffer)
+        
+        return buffer
     }
 }

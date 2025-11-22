@@ -447,16 +447,12 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
                 // Get unoriented depth map for edge detection (native camera orientation)
                 let unorientedDepthMap = self.depthProcessor.getUnorientedDepthMap(depthData)
 
-                // Detect edges using GPU (in native orientation - no rotation overhead)
-                let unorientedEdgeMap = self.edgeDetectorGPU.detectEdges(
-                    rgbImage: self.latestRGBImage,
-                    depthMap: unorientedDepthMap
-                )
+                // Detect edges using GPU
+                let unorientedEdgeMap = self.edgeDetectorGPU?.processFrame(depthPixelBuffer: unorientedDepthMap)
 
                 let elapsed = Date().timeIntervalSince(startTime)
                 print("⏱️ GPU edge detection took \(String(format: "%.1f", elapsed * 1000))ms")
-
-                // Orient the edge map to match screen orientation (same as depth map)
+                
                 guard let unorientedEdges = unorientedEdgeMap,
                       let videoOrientation = self.previewLayer.connection?.videoOrientation else {
                     return
