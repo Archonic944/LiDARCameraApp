@@ -46,12 +46,29 @@ class CameraViewController: UIViewController {
     // UI components
     private var depthPreviewView: UIImageView!
     private var edgePreviewView: UIImageView!
-    private var controlsContainer: UIView!
+    private var pageControl: UISegmentedControl!
+    private var disparityContainer: UIView!
+    private var edgeDetectionContainer: UIView!
+
+    // Disparity controls
     private var minLabel: UILabel!
     private var maxLabel: UILabel!
     private var minSlider: UISlider!
     private var maxSlider: UISlider!
     private var hintLabel: UILabel!
+
+    // Edge detection controls
+    private var sensitivityLabel: UILabel!
+    private var sensitivitySlider: UISlider!
+    private var gridNLabel: UILabel!
+    private var gridNSlider: UISlider!
+    private var gridMLabel: UILabel!
+    private var gridMSlider: UISlider!
+    private var rowColSkipLabel: UILabel!
+    private var rowColSkipSlider: UISlider!
+    private var randomSearchLabel: UILabel!
+    private var randomSearchSlider: UISlider!
+    private var edgeHintLabel: UILabel!
 
     // Cached depth data for tap-to-calibrate
     private var latestDepthData: AVDepthData?
@@ -114,19 +131,42 @@ class CameraViewController: UIViewController {
         edgePreviewView.isUserInteractionEnabled = true
     }
 
-    /// Sets up on-screen sliders to tweak min/max disparity in real time
+    /// Sets up on-screen sliders to tweak min/max disparity and edge detection parameters in real time
     private func setupDisparityControls() {
         edgePreviewView.isUserInteractionEnabled = false
         // Ensure defaults are applied at startup
         depthProcessor.resetToDefaultRange()
 
-        // Container view
-        controlsContainer = UIView()
-        controlsContainer.translatesAutoresizingMaskIntoConstraints = false
-        controlsContainer.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        controlsContainer.layer.cornerRadius = 10
-        controlsContainer.clipsToBounds = true
-        view.addSubview(controlsContainer)
+        // Segmented control for page switching
+        pageControl = UISegmentedControl(items: ["Disparity", "Edge Detection"])
+        pageControl.translatesAutoresizingMaskIntoConstraints = false
+        pageControl.selectedSegmentIndex = 0
+        pageControl.addTarget(self, action: #selector(onPageChanged), for: .valueChanged)
+        view.addSubview(pageControl)
+
+        // Setup both containers
+        setupDisparityPage()
+        setupEdgeDetectionPage()
+
+        // Layout page control
+        NSLayoutConstraint.activate([
+            pageControl.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            pageControl.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            pageControl.bottomAnchor.constraint(equalTo: disparityContainer.topAnchor, constant: -12)
+        ])
+
+        // Show disparity page by default
+        showPage(index: 0)
+    }
+
+    /// Creates the disparity controls container
+    private func setupDisparityPage() {
+        disparityContainer = UIView()
+        disparityContainer.translatesAutoresizingMaskIntoConstraints = false
+        disparityContainer.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        disparityContainer.layer.cornerRadius = 10
+        disparityContainer.clipsToBounds = true
+        view.addSubview(disparityContainer)
 
         // Labels and sliders
         minLabel = UILabel()
@@ -158,11 +198,11 @@ class CameraViewController: UIViewController {
         hintLabel.numberOfLines = 0
 
         // Add subviews
-        controlsContainer.addSubview(minLabel)
-        controlsContainer.addSubview(minSlider)
-        controlsContainer.addSubview(maxLabel)
-        controlsContainer.addSubview(maxSlider)
-        controlsContainer.addSubview(hintLabel)
+        disparityContainer.addSubview(minLabel)
+        disparityContainer.addSubview(minSlider)
+        disparityContainer.addSubview(maxLabel)
+        disparityContainer.addSubview(maxSlider)
+        disparityContainer.addSubview(hintLabel)
 
         // Set initial slider values from processor
         minSlider.value = depthProcessor.minDisparity
@@ -171,31 +211,184 @@ class CameraViewController: UIViewController {
 
         // Layout constraints
         NSLayoutConstraint.activate([
-            controlsContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            controlsContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            controlsContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            disparityContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            disparityContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            disparityContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
 
-            minLabel.topAnchor.constraint(equalTo: controlsContainer.topAnchor, constant: 10),
-            minLabel.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
-            minLabel.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+            minLabel.topAnchor.constraint(equalTo: disparityContainer.topAnchor, constant: 10),
+            minLabel.leadingAnchor.constraint(equalTo: disparityContainer.leadingAnchor, constant: 12),
+            minLabel.trailingAnchor.constraint(equalTo: disparityContainer.trailingAnchor, constant: -12),
 
             minSlider.topAnchor.constraint(equalTo: minLabel.bottomAnchor, constant: 6),
-            minSlider.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
-            minSlider.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+            minSlider.leadingAnchor.constraint(equalTo: disparityContainer.leadingAnchor, constant: 12),
+            minSlider.trailingAnchor.constraint(equalTo: disparityContainer.trailingAnchor, constant: -12),
 
             maxLabel.topAnchor.constraint(equalTo: minSlider.bottomAnchor, constant: 10),
-            maxLabel.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
-            maxLabel.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+            maxLabel.leadingAnchor.constraint(equalTo: disparityContainer.leadingAnchor, constant: 12),
+            maxLabel.trailingAnchor.constraint(equalTo: disparityContainer.trailingAnchor, constant: -12),
 
             maxSlider.topAnchor.constraint(equalTo: maxLabel.bottomAnchor, constant: 6),
-            maxSlider.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
-            maxSlider.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
+            maxSlider.leadingAnchor.constraint(equalTo: disparityContainer.leadingAnchor, constant: 12),
+            maxSlider.trailingAnchor.constraint(equalTo: disparityContainer.trailingAnchor, constant: -12),
 
             hintLabel.topAnchor.constraint(equalTo: maxSlider.bottomAnchor, constant: 8),
-            hintLabel.leadingAnchor.constraint(equalTo: controlsContainer.leadingAnchor, constant: 12),
-            hintLabel.trailingAnchor.constraint(equalTo: controlsContainer.trailingAnchor, constant: -12),
-            hintLabel.bottomAnchor.constraint(equalTo: controlsContainer.bottomAnchor, constant: -10)
+            hintLabel.leadingAnchor.constraint(equalTo: disparityContainer.leadingAnchor, constant: 12),
+            hintLabel.trailingAnchor.constraint(equalTo: disparityContainer.trailingAnchor, constant: -12),
+            hintLabel.bottomAnchor.constraint(equalTo: disparityContainer.bottomAnchor, constant: -10)
         ])
+    }
+
+    /// Creates the edge detection controls container
+    private func setupEdgeDetectionPage() {
+        edgeDetectionContainer = UIView()
+        edgeDetectionContainer.translatesAutoresizingMaskIntoConstraints = false
+        edgeDetectionContainer.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        edgeDetectionContainer.layer.cornerRadius = 10
+        edgeDetectionContainer.clipsToBounds = true
+        view.addSubview(edgeDetectionContainer)
+
+        // Create labels and sliders for edge detection parameters
+        sensitivityLabel = UILabel()
+        sensitivityLabel.translatesAutoresizingMaskIntoConstraints = false
+        sensitivityLabel.textColor = .white
+        sensitivityLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        sensitivitySlider = UISlider()
+        sensitivitySlider.translatesAutoresizingMaskIntoConstraints = false
+        sensitivitySlider.minimumValue = 0.001
+        sensitivitySlider.maximumValue = 0.2
+        sensitivitySlider.value = edgeDetectorGPU?.sensitivityT ?? 0.05
+        sensitivitySlider.addTarget(self, action: #selector(onSensitivitySliderChanged), for: .valueChanged)
+
+        gridNLabel = UILabel()
+        gridNLabel.translatesAutoresizingMaskIntoConstraints = false
+        gridNLabel.textColor = .white
+        gridNLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        gridNSlider = UISlider()
+        gridNSlider.translatesAutoresizingMaskIntoConstraints = false
+        gridNSlider.minimumValue = 8
+        gridNSlider.maximumValue = 128
+        gridNSlider.value = Float(edgeDetectorGPU?.gridN ?? 32)
+        gridNSlider.addTarget(self, action: #selector(onGridNSliderChanged), for: .valueChanged)
+
+        gridMLabel = UILabel()
+        gridMLabel.translatesAutoresizingMaskIntoConstraints = false
+        gridMLabel.textColor = .white
+        gridMLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        gridMSlider = UISlider()
+        gridMSlider.translatesAutoresizingMaskIntoConstraints = false
+        gridMSlider.minimumValue = 8
+        gridMSlider.maximumValue = 128
+        gridMSlider.value = Float(edgeDetectorGPU?.gridM ?? 24)
+        gridMSlider.addTarget(self, action: #selector(onGridMSliderChanged), for: .valueChanged)
+
+        rowColSkipLabel = UILabel()
+        rowColSkipLabel.translatesAutoresizingMaskIntoConstraints = false
+        rowColSkipLabel.textColor = .white
+        rowColSkipLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        rowColSkipSlider = UISlider()
+        rowColSkipSlider.translatesAutoresizingMaskIntoConstraints = false
+        rowColSkipSlider.minimumValue = 1
+        rowColSkipSlider.maximumValue = 10
+        rowColSkipSlider.value = Float(edgeDetectorGPU?.rowColSkipK ?? 1)
+        rowColSkipSlider.addTarget(self, action: #selector(onRowColSkipSliderChanged), for: .valueChanged)
+
+        randomSearchLabel = UILabel()
+        randomSearchLabel.translatesAutoresizingMaskIntoConstraints = false
+        randomSearchLabel.textColor = .white
+        randomSearchLabel.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+
+        randomSearchSlider = UISlider()
+        randomSearchSlider.translatesAutoresizingMaskIntoConstraints = false
+        randomSearchSlider.minimumValue = 0.0
+        randomSearchSlider.maximumValue = 1.0
+        randomSearchSlider.value = edgeDetectorGPU?.randomSearchRatio ?? 0.08
+        randomSearchSlider.addTarget(self, action: #selector(onRandomSearchSliderChanged), for: .valueChanged)
+
+        edgeHintLabel = UILabel()
+        edgeHintLabel.translatesAutoresizingMaskIntoConstraints = false
+        edgeHintLabel.textColor = .systemYellow
+        edgeHintLabel.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        edgeHintLabel.numberOfLines = 0
+
+        // Add subviews
+        edgeDetectionContainer.addSubview(sensitivityLabel)
+        edgeDetectionContainer.addSubview(sensitivitySlider)
+        edgeDetectionContainer.addSubview(gridNLabel)
+        edgeDetectionContainer.addSubview(gridNSlider)
+        edgeDetectionContainer.addSubview(gridMLabel)
+        edgeDetectionContainer.addSubview(gridMSlider)
+        edgeDetectionContainer.addSubview(rowColSkipLabel)
+        edgeDetectionContainer.addSubview(rowColSkipSlider)
+        edgeDetectionContainer.addSubview(randomSearchLabel)
+        edgeDetectionContainer.addSubview(randomSearchSlider)
+        edgeDetectionContainer.addSubview(edgeHintLabel)
+
+        updateEdgeDetectionLabelsAndHint()
+
+        // Layout constraints
+        NSLayoutConstraint.activate([
+            edgeDetectionContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            edgeDetectionContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            edgeDetectionContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+
+            sensitivityLabel.topAnchor.constraint(equalTo: edgeDetectionContainer.topAnchor, constant: 10),
+            sensitivityLabel.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            sensitivityLabel.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            sensitivitySlider.topAnchor.constraint(equalTo: sensitivityLabel.bottomAnchor, constant: 4),
+            sensitivitySlider.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            sensitivitySlider.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            gridNLabel.topAnchor.constraint(equalTo: sensitivitySlider.bottomAnchor, constant: 8),
+            gridNLabel.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            gridNLabel.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            gridNSlider.topAnchor.constraint(equalTo: gridNLabel.bottomAnchor, constant: 4),
+            gridNSlider.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            gridNSlider.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            gridMLabel.topAnchor.constraint(equalTo: gridNSlider.bottomAnchor, constant: 8),
+            gridMLabel.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            gridMLabel.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            gridMSlider.topAnchor.constraint(equalTo: gridMLabel.bottomAnchor, constant: 4),
+            gridMSlider.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            gridMSlider.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            rowColSkipLabel.topAnchor.constraint(equalTo: gridMSlider.bottomAnchor, constant: 8),
+            rowColSkipLabel.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            rowColSkipLabel.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            rowColSkipSlider.topAnchor.constraint(equalTo: rowColSkipLabel.bottomAnchor, constant: 4),
+            rowColSkipSlider.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            rowColSkipSlider.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            randomSearchLabel.topAnchor.constraint(equalTo: rowColSkipSlider.bottomAnchor, constant: 8),
+            randomSearchLabel.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            randomSearchLabel.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            randomSearchSlider.topAnchor.constraint(equalTo: randomSearchLabel.bottomAnchor, constant: 4),
+            randomSearchSlider.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            randomSearchSlider.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+
+            edgeHintLabel.topAnchor.constraint(equalTo: randomSearchSlider.bottomAnchor, constant: 8),
+            edgeHintLabel.leadingAnchor.constraint(equalTo: edgeDetectionContainer.leadingAnchor, constant: 12),
+            edgeHintLabel.trailingAnchor.constraint(equalTo: edgeDetectionContainer.trailingAnchor, constant: -12),
+            edgeHintLabel.bottomAnchor.constraint(equalTo: edgeDetectionContainer.bottomAnchor, constant: -10)
+        ])
+    }
+
+    private func showPage(index: Int) {
+        disparityContainer.isHidden = (index != 0)
+        edgeDetectionContainer.isHidden = (index != 1)
+    }
+
+    @objc private func onPageChanged() {
+        showPage(index: pageControl.selectedSegmentIndex)
     }
 
     private func updateDisparityLabelsAndHint() {
@@ -206,6 +399,25 @@ class CameraViewController: UIViewController {
         hintLabel.text = String(
             format: "Use as defaults:\nDepthProcessor.defaultMinDisparity = %.3f\nDepthProcessor.defaultMaxDisparity = %.3f",
             minVal, maxVal
+        )
+    }
+
+    private func updateEdgeDetectionLabelsAndHint() {
+        let sensitivity = sensitivitySlider.value
+        let gridN = Int(gridNSlider.value)
+        let gridM = Int(gridMSlider.value)
+        let rowColSkip = Int(rowColSkipSlider.value)
+        let randomSearch = randomSearchSlider.value
+
+        sensitivityLabel.text = String(format: "Sensitivity T: %.3f (lower = more sensitive)", sensitivity)
+        gridNLabel.text = String(format: "Grid N (horizontal patches): %d", gridN)
+        gridMLabel.text = String(format: "Grid M (vertical patches): %d", gridM)
+        rowColSkipLabel.text = String(format: "Row/Col Skip K: %d", rowColSkip)
+        randomSearchLabel.text = String(format: "Random Search Ratio: %.2f", randomSearch)
+
+        edgeHintLabel.text = String(
+            format: "Use as defaults:\nsensitivityT = %.3f\ngridN = %d\ngridM = %d\nrowColSkipK = %d\nrandomSearchRatio = %.2f",
+            sensitivity, gridN, gridM, rowColSkip, randomSearch
         )
     }
 
@@ -227,6 +439,31 @@ class CameraViewController: UIViewController {
         depthProcessor.minDisparity = minSlider.value
         depthProcessor.maxDisparity = maxSlider.value
         updateDisparityLabelsAndHint()
+    }
+
+    @objc private func onSensitivitySliderChanged() {
+        edgeDetectorGPU?.sensitivityT = sensitivitySlider.value
+        updateEdgeDetectionLabelsAndHint()
+    }
+
+    @objc private func onGridNSliderChanged() {
+        edgeDetectorGPU?.gridN = Int(gridNSlider.value)
+        updateEdgeDetectionLabelsAndHint()
+    }
+
+    @objc private func onGridMSliderChanged() {
+        edgeDetectorGPU?.gridM = Int(gridMSlider.value)
+        updateEdgeDetectionLabelsAndHint()
+    }
+
+    @objc private func onRowColSkipSliderChanged() {
+        edgeDetectorGPU?.rowColSkipK = Int(rowColSkipSlider.value)
+        updateEdgeDetectionLabelsAndHint()
+    }
+
+    @objc private func onRandomSearchSliderChanged() {
+        edgeDetectorGPU?.randomSearchRatio = randomSearchSlider.value
+        updateEdgeDetectionLabelsAndHint()
     }
 
     // MARK: - Camera Permission
