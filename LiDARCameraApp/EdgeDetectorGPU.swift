@@ -17,7 +17,7 @@ class EdgeDetectorGPU {
     // MARK: - Configuration Parameters
     
     // T in Algorithm 1, controls sensitivity (lower T = more sensitive)
-    var sensitivityT: Float = 0.05
+    var sensitivityT: Float = 0.065
     
     // N patches horizontally (e.g., 32 for 640/32=20 pixel wide patches)
     var gridN: Int = 32
@@ -29,7 +29,10 @@ class EdgeDetectorGPU {
     var rowColSkipK: Int = 1
     
     // rand_search (Eq 1). Percentage of patches randomly searched each frame.
-    var randomSearchRatio: Float = 0.08
+    var randomSearchRatio: Float = 0.47
+    
+    // Distance (meters) where edge intensity begins to fade (1.0 at < distance, fading as distance increases)
+    var edgeEmphasisDistance: Float = 0.5
 
     // MARK: - Metal Resources
     private let device: MTLDevice
@@ -69,6 +72,7 @@ class EdgeDetectorGPU {
         uint patchGridY;    // M patches vertically
         uint rowColSkip;    // K parameter
         float thresholdT;   // T parameter
+        float emphasisDist; // Distance where edges start to fade
     };
 
     // MARK: - Algorithm 1: P_Scan Core Logic
@@ -131,15 +135,17 @@ class EdgeDetectorGPU {
                     float diff = v_last_valid - v_n;
                     
                     // Logic from Source [54] and [64]: Edge is the pixel with smaller depth value (closer).
-                    // We write 1.0 to the R channel (which is the only channel in R32Float)
+                    // We write intensity to the R channel based on closeness
                     if (diff > threshold) {
                         // V_last_valid > V_n. V_n is smaller (closer), so V_n is the edge.
-                        edgeTex.write(float4(1.0, 0, 0, 1), coords);
+                        float intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
+                        edgeTex.write(float4(intensity, 0, 0, 1), coords);
                         atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
                     } else if (-diff > threshold) {
                         // V_n > V_last_valid. V_last_valid is smaller (closer), so V_last_valid is the edge.
+                        float intensity = clamp(params.emphasisDist / v_last_valid, 0.0, 1.0);
                         uint2 lastCoords = isRowScan ? uint2(uint(last_valid_idx), lineIndex) : uint2(lineIndex, uint(last_valid_idx));
-                        edgeTex.write(float4(1.0, 0, 0, 1), lastCoords);
+                        edgeTex.write(float4(intensity, 0, 0, 1), lastCoords);
                         
                         // We must update the patch counter for where the LAST pixel was located.
                         uint lastPX = lastCoords.x / patchW;
@@ -280,7 +286,8 @@ class EdgeDetectorGPU {
             patchGridX: UInt32(gridN),
             patchGridY: UInt32(gridM),
             rowColSkip: UInt32(rowColSkipK),
-            thresholdT: sensitivityT
+            thresholdT: sensitivityT,
+            emphasisDist: edgeEmphasisDistance
         )
         
         // Step B: Run P_Scan (Row Iteration)
@@ -399,6 +406,7 @@ class EdgeDetectorGPU {
         var patchGridY: UInt32
         var rowColSkip: UInt32
         var thresholdT: Float
+        var emphasisDist: Float
     }
     
     // Creates an MTLTexture for the depth map (R32Float) from a CVPixelBuffer
