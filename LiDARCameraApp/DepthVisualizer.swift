@@ -23,6 +23,8 @@ class DepthVisualizer {
     /// Color for near objects (high disparity values)
     var nearColor: CIColor = CIColor(red: 1, green: 0, blue: 0)  // Red
 
+    private var frameCounter: Int = 0
+
     // MARK: - Initialization
 
     init() {
@@ -75,6 +77,8 @@ class DepthVisualizer {
                        orientation: AVCaptureVideoOrientation,
                        targetSize: CGSize) -> CGImage? {
 
+        printEdgeStatistics(for: edgeMap)
+
         // Create CIImage from edge map (already correctly oriented by DepthProcessor)
         var ciEdge = CIImage(cvPixelBuffer: edgeMap)
 
@@ -92,6 +96,42 @@ class DepthVisualizer {
 
         // Render to CGImage
         return ciContext.createCGImage(ciEdge, from: ciEdge.extent)
+    }
+
+    // MARK: - Private Methods
+
+    private func printEdgeStatistics(for buffer: CVPixelBuffer) {
+        frameCounter += 1
+        if frameCounter % 10 != 0 { return } // Print every ~0.3 second (10fps)
+
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(buffer) else { return }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        
+        // Assuming OneComponent32Float (float)
+        var maxVal: Float = 0
+        var nonZeroCount = 0
+        var sum: Float = 0
+        
+        // Sample every 10th pixel to check distribution
+        for y in stride(from: 0, to: height, by: 10) {
+            let rowPtr = baseAddress.advanced(by: y * bytesPerRow).assumingMemoryBound(to: Float.self)
+            for x in stride(from: 0, to: width, by: 10) {
+                let val = rowPtr[x]
+                if val > maxVal { maxVal = val }
+                if val > 0.001 {
+                    sum += val
+                    nonZeroCount += 1
+                }
+            }
+        }
+        
+        let avg = nonZeroCount > 0 ? sum / Float(nonZeroCount) : 0
+        print("[EdgeDebug] Max: \(String(format: "%.3f", maxVal)), Avg(NonZero): \(String(format: "%.3f", avg)), Coverage: \(String(format: "%.1f", (Float(nonZeroCount) / Float((width/10)*(height/10))) * 100))%")
     }
 
     // MARK: - Private Methods
