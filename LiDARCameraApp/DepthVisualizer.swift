@@ -80,8 +80,8 @@ class DepthVisualizer {
 
         // Apply edge color mapping (transparent -> bright green)
         ciEdge = ciEdge.applyingFilter("CIFalseColor", parameters: [
-            "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0),      // 0 = transparent
-            "inputColor1": CIColor(red: 0, green: 1, blue: 0, alpha: 1)       // 1 = bright green
+            "inputColor0": CIColor(red: 0, green: 1, blue: 0, alpha: 0),      // Transparent Green (preserves brightness for weak edges)
+            "inputColor1": CIColor(red: 0, green: 1, blue: 0, alpha: 1)       // Bright Green
         ])
 
         // NOTE: Orientation already applied in DepthProcessor to edge map
