@@ -37,9 +37,9 @@ class HapticFeedbackManager {
     private var isAlertMode: Bool = false
     private var alertOscillationHigh: Bool = false
     
-    // Alert intensities (based on original max of 1.5)
-    private let alertHighIntensity: Float = 1.5 // 100% of original
-    private let alertLowIntensity: Float = 1.35 // 90% of original
+    // Alert intensities - WIDE oscillation for very noticeable elephant-like pulses
+    private let alertHighIntensity: Float = 4.0
+    private let alertLowIntensity: Float = 0.3
 
     // MARK: - Initialization
 
