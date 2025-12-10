@@ -30,7 +30,16 @@ class HapticFeedbackManager {
     /// Intensity range for haptic feedback (0.0 to 1.0)
     /// Note: Values below ~0.4 may not produce perceptible vibration on some devices
     var minimumIntensity: Float = 0.2
-    var maximumIntensity: Float = 1.5
+    var maximumIntensity: Float = 1.2
+
+    // MARK: - Alert Mode Properties
+    private var alertFrameCounter: Int = 0
+    private var isAlertMode: Bool = false
+    private var alertOscillationHigh: Bool = false
+    
+    // Alert intensities (based on original max of 1.5)
+    private let alertHighIntensity: Float = 1.5 // 100% of original
+    private let alertLowIntensity: Float = 1.35 // 90% of original
 
     // MARK: - Initialization
 
@@ -41,7 +50,7 @@ class HapticFeedbackManager {
     deinit {
         stop()
     }
-
+    
     // MARK: - Setup
 
     private func setupHapticEngine() {
@@ -149,6 +158,31 @@ class HapticFeedbackManager {
         isRunning = false
         print("🛑 Continuous haptics stopped")
     }
+    
+    /// Updates the proximity alert state
+    /// - Parameter isClose: True if any part of the depth buffer is closer than the threshold
+    func updateProximityAlert(isClose: Bool) {
+        if isClose {
+            alertFrameCounter += 1
+            // print("⚠️ Alert counter: \(alertFrameCounter)")
+        } else {
+            if alertFrameCounter > 0 {
+                // print("✅ Alert counter reset")
+            }
+            alertFrameCounter = 0
+            if isAlertMode {
+                print("😅 Alert Mode DEACTIVATED")
+            }
+            isAlertMode = false
+        }
+        
+        if alertFrameCounter >= 5 {
+            if !isAlertMode {
+                print("🚨 Alert Mode ACTIVATED")
+            }
+            isAlertMode = true
+        }
+    }
 
     /// Updates haptic intensity based on proximity value (1.0 = close, 0.0 = far)
     /// - Parameter depth: Normalized depth value where higher = closer
@@ -158,9 +192,17 @@ class HapticFeedbackManager {
             return
         }
 
-        // Map depth to intensity range
-        let intensity = minimumIntensity + (depth * (maximumIntensity - minimumIntensity))
-        let clampedIntensity = max(minimumIntensity, min(maximumIntensity, intensity))
+        var clampedIntensity: Float = 0.0
+        
+        if isAlertMode {
+            // Rapidly oscillate between 90% and 100% of original max (1.35 - 1.5)
+            alertOscillationHigh.toggle()
+            clampedIntensity = alertOscillationHigh ? alertHighIntensity : alertLowIntensity
+        } else {
+            // Normal operation: Map depth to intensity range
+            let intensity = minimumIntensity + (depth * (maximumIntensity - minimumIntensity))
+            clampedIntensity = max(minimumIntensity, min(maximumIntensity, intensity))
+        }
 
         // DEBUG: Log intensity values
         // print("🔊 Haptic intensity: \(clampedIntensity) (from depth: \(depth))")

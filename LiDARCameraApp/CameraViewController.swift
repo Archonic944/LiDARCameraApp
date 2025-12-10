@@ -674,6 +674,10 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Process depth data and orient it to match screen coordinates
         let processedDepthMap = depthProcessor.processDepthData(depthData, orientation: videoOrientation)
 
+        // Check if any part of the scene is closer than 0.25m for alert mode
+        let isTooClose = depthProcessor.checkForMinDistance(in: processedDepthMap, minDistance: 0.25)
+        hapticManager.updateProximityAlert(isClose: isTooClose)
+
         // GPU-accelerated edge detection (works on unoriented depth for consistency)
         edgeFrameCounter += 1
         if edgeFrameCounter >= edgeFrameSkip {

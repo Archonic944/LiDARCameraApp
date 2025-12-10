@@ -303,6 +303,59 @@ class DepthProcessor {
         return count > 0 ? sum / Float(count) : 0.0
     }
 
+    // Debug counter
+    private static var logCounter = 0
+
+    /// Checks if any pixel in the depth map is closer than the specified distance
+    /// - Parameters:
+    ///   - depthMap: Depth pixel buffer in METERS
+    ///   - minDistance: Minimum distance threshold in meters
+    /// - Returns: True if any pixel is closer than minDistance
+    func checkForMinDistance(in depthMap: CVPixelBuffer, minDistance: Float) -> Bool {
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else {
+            return false
+        }
+
+        let floatBuffer = baseAddress.assumingMemoryBound(to: Float.self)
+        let count = width * height
+        
+        DepthProcessor.logCounter += 1
+        let shouldLog = DepthProcessor.logCounter % 30 == 0
+        
+        if shouldLog {
+            // Debug mode: Scan whole buffer to find true min
+            var minVal: Float = Float.greatestFiniteMagnitude
+            var found = false
+            
+            for i in 0..<count {
+                let value = floatBuffer[i]
+                if value.isFinite && value > 0 {
+                    if value < minVal { minVal = value }
+                    if value < minDistance { found = true }
+                }
+            }
+            
+            print("🔍 Min valid depth in frame: \(String(format: "%.3f", minVal))m (Threshold: \(minDistance)m)")
+            return found
+        } else {
+            // Fast mode: Early exit
+            for i in 0..<count {
+                let value = floatBuffer[i]
+                if value.isFinite && value > 0 && value < minDistance {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
     /// Converts a single meter value to proximity (0-1) where 0=far, 1=close
     func metersToProximity(_ meters: Float) -> Float {
         let range = maxDisparity - minDisparity
