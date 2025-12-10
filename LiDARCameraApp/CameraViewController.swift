@@ -30,7 +30,7 @@ class CameraViewController: UIViewController {
     // Edge detection performance
     private let edgeQueue = DispatchQueue(label: "com.gabe.edgeQueue", qos: .userInitiated)
     private var edgeFrameCounter: Int = 0
-    private let edgeFrameSkip: Int = 3  // Process every 3rd frame for GPU (faster)
+    private let edgeFrameSkip: Int = 1  // Process every 3rd frame for GPU (faster)
 
     // Cached frames for edge detection
     private var latestRGBImage: CIImage?

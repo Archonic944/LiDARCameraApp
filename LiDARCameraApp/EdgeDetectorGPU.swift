@@ -29,7 +29,7 @@ class EdgeDetectorGPU {
     var rowColSkipK: Int = 1
     
     // rand_search (Eq 1). Percentage of patches randomly searched each frame.
-    var randomSearchRatio: Float = 0.65
+    var randomSearchRatio: Float = 0.8
     
     // Distance (meters) where edge intensity begins to fade (1.0 at < distance, fading as distance increases)
     var edgeEmphasisDistance: Float = 1.0
