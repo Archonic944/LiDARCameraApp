@@ -35,6 +35,9 @@ class CameraViewController: UIViewController {
     // Cached frames for edge detection
     private var latestRGBImage: CIImage?
     private var latestEdgeMap: CVPixelBuffer?
+    
+    // Edge crossing state for haptic click
+    private var isOverEdge: Bool = false
 
     // Haptic feedback
     private let hapticManager = HapticFeedbackManager()
@@ -82,7 +85,8 @@ class CameraViewController: UIViewController {
         if FeatureFlags.tuningMode {
             setupDisparityControls()
         } else {
-            setupGestureManager()
+            // Gestures deprecated
+            // setupGestureManager()
         }
         requestCameraAccess()
 
@@ -700,7 +704,28 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
                 // Update cached edge map (now correctly oriented)
                 self.latestEdgeMap = orientedEdgeMap
 
-                // Update edge alert based on current hold state
+                // --- NEW HAPTIC CLICK LOGIC ---
+                // Sample max intensity in center 5% of screen
+                let centerEdgeMax = self.depthProcessor.sampleCenterMax(from: orientedEdgeMap, apertureSize: 0.05)
+                let edgeThreshold: Float = 0.5
+                
+                if centerEdgeMax > edgeThreshold {
+                    if !self.isOverEdge {
+                        // Rising edge -> Click
+                        self.hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 1.0)
+                        self.isOverEdge = true
+                        print("💥 Edge Click! (val: \(String(format: "%.3f", centerEdgeMax)))")
+                    }
+                } else {
+                    if self.isOverEdge {
+                        // Falling edge -> Reset
+                        self.isOverEdge = false
+                        // print("📉 Edge clear")
+                    }
+                }
+
+                // Update edge alert based on current hold state (Deprecated)
+                /*
                 if let gestureManager = self.gestureManager {
                     self.edgeAlertManager.updateEdgeAlert(
                         edgeMap: orientedEdgeMap,
@@ -710,6 +735,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
                         holdingBottom: gestureManager.isHoldingBottomEdge
                     )
                 }
+                */
 
                 // Visualize edges and update UI
                 let viewSize = UIScreen.main.bounds.size
