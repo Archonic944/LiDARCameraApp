@@ -211,6 +211,51 @@ class DepthProcessor {
         return (max(0.1, p5), p95)
     }
 
+    /// Samples maximum value from a center aperture region
+    /// - Parameters:
+    ///   - buffer: Pixel buffer (Float32)
+    ///   - apertureSize: Size of the center region to sample (0.0 to 1.0, as fraction of image)
+    /// - Returns: Maximum value in the aperture
+    func sampleCenterMax(from buffer: CVPixelBuffer, apertureSize: CGFloat = APERTURE_SIZE) -> Float {
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(buffer) else {
+            return 0.0
+        }
+
+        let floatBuffer = baseAddress.assumingMemoryBound(to: Float.self)
+
+        // Calculate aperture bounds (center region)
+        let centerX = width / 2
+        let centerY = height / 2
+        let apertureWidth = Int(CGFloat(width) * apertureSize)
+        let apertureHeight = Int(CGFloat(height) * apertureSize)
+
+        let startX = max(0, centerX - apertureWidth / 2)
+        let endX = min(width, centerX + apertureWidth / 2)
+        let startY = max(0, centerY - apertureHeight / 2)
+        let endY = min(height, centerY + apertureHeight / 2)
+
+        // Sample max value in aperture
+        var maxVal: Float = 0.0
+
+        for y in startY..<endY {
+            for x in startX..<endX {
+                let index = y * width + x
+                let value = floatBuffer[index]
+                if value.isFinite && value > maxVal {
+                    maxVal = value
+                }
+            }
+        }
+
+        return maxVal
+    }
+
     /// Samples average depth from a center aperture region
     /// - Parameters:
     ///   - depthMap: Depth pixel buffer in METERS

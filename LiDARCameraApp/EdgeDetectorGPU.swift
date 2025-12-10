@@ -29,10 +29,10 @@ class EdgeDetectorGPU {
     var rowColSkipK: Int = 1
     
     // rand_search (Eq 1). Percentage of patches randomly searched each frame.
-    var randomSearchRatio: Float = 0.47
+    var randomSearchRatio: Float = 0.65
     
     // Distance (meters) where edge intensity begins to fade (1.0 at < distance, fading as distance increases)
-    var edgeEmphasisDistance: Float = 0.5
+    var edgeEmphasisDistance: Float = 1.0
 
     // MARK: - Metal Resources
     private let device: MTLDevice
@@ -139,13 +139,13 @@ class EdgeDetectorGPU {
                     if (diff > threshold) {
                         // V_last_valid > V_n. V_n is smaller (closer), so V_n is the edge.
                         float intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
-                        edgeTex.write(float4(intensity, 0, 0, 1), coords);
+                        edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
                         atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
                     } else if (-diff > threshold) {
                         // V_n > V_last_valid. V_last_valid is smaller (closer), so V_last_valid is the edge.
                         float intensity = clamp(params.emphasisDist / v_last_valid, 0.0, 1.0);
                         uint2 lastCoords = isRowScan ? uint2(uint(last_valid_idx), lineIndex) : uint2(lineIndex, uint(last_valid_idx));
-                        edgeTex.write(float4(intensity, 0, 0, 1), lastCoords);
+                        edgeTex.write(float4(intensity, intensity, intensity, 1), lastCoords);
                         
                         // We must update the patch counter for where the LAST pixel was located.
                         uint lastPX = lastCoords.x / patchW;
@@ -435,7 +435,7 @@ class EdgeDetectorGPU {
     
     // Creates the output edge mask texture using R32Float for compatibility with DepthVisualizer
     private func createOutputTexture(width: Int, height: Int) -> MTLTexture? {
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: width, height: height, mipmapped: false)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: width, height: height, mipmapped: false)
         desc.usage = [.shaderWrite, .shaderRead]
         return device.makeTexture(descriptor: desc)
     }
