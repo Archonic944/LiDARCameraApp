@@ -20,8 +20,8 @@ class EdgeDetectorGPU {
     var sensitivityT: Float = 0.065
     
     // Threshold for Normal-based crease detection (Cosine similarity).
-    // 0.85 corresponds to approx 31 degrees difference.
-    var sensitivityCreaseT: Float = 0.85
+    // 0.82 corresponds to approx 35 degrees difference.
+    var sensitivityCreaseT: Float = 0.82
     
     // N patches horizontally (e.g., 32 for 640/32=20 pixel wide patches)
     var gridN: Int = 32
@@ -86,16 +86,15 @@ class EdgeDetectorGPU {
         float sum = 0.0;
         float validWeight = 0.0;
         
-        // Simple cross kernel (5-tap) is faster and usually sufficient
-        int2 offsets[5] = {int2(0,0), int2(1,0), int2(-1,0), int2(0,1), int2(0,-1)};
-        
-        for (int i = 0; i < 5; i++) {
-             uint2 samplePos = uint2(int2(c) + offsets[i]);
-             float d = depthTex.read(samplePos).r;
-             if (d > 0.001) {
-                 sum += d;
-                 validWeight += 1.0;
-             }
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                uint2 samplePos = uint2(int2(c) + int2(dx, dy));
+                float d = depthTex.read(samplePos).r;
+                if (d > 0.001) {
+                    sum += d;
+                    validWeight += 1.0;
+                }
+            }
         }
         
         return (validWeight > 0.0) ? (sum / validWeight) : 0.0;
@@ -213,9 +212,8 @@ class EdgeDetectorGPU {
                         if (dotP < params.creaseT) {
                              intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
                              
-                             // Scale intensity by how "sharp" the crease is? 
-                             // Optional: make it pop more
-                             intensity = max(intensity, 0.5); 
+                             // Softened intensity boost
+                             intensity = max(intensity, 0.3); 
                              
                              edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
                              atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
