@@ -19,6 +19,9 @@ class EdgeDetectorGPU {
     // T in Algorithm 1, controls sensitivity (lower T = more sensitive)
     var sensitivityT: Float = 0.065
     
+    // Threshold for Laplacian crease detection (lower = more sensitive to soft corners)
+    var sensitivityCreaseT: Float = 0.015
+    
     // N patches horizontally (e.g., 32 for 640/32=20 pixel wide patches)
     var gridN: Int = 32
     
@@ -71,7 +74,8 @@ class EdgeDetectorGPU {
         uint patchGridX;    // N patches horizontally
         uint patchGridY;    // M patches vertically
         uint rowColSkip;    // K parameter
-        float thresholdT;   // T parameter
+        float thresholdT;   // T parameter for Occlusion
+        float creaseT;      // T parameter for Creases (Laplacian)
         float emphasisDist; // Distance where edges start to fade
     };
 
@@ -128,22 +132,25 @@ class EdgeDetectorGPU {
             
             if (v_n > 0.001) { // if Vn != 0 (valid pixel)
                 
+                bool edgeFound = false;
+                float intensity = 0.0;
+                
+                // 1. Occlusion Detection (Depth Jump)
                 if (last_valid_idx != -1) {
                     // threshold = Min(Vn, Vlast_valid) * T [Source 53]
                     float threshold = min(v_n, v_last_valid) * params.thresholdT;
                     
                     float diff = v_last_valid - v_n;
                     
-                    // Logic from Source [54] and [64]: Edge is the pixel with smaller depth value (closer).
-                    // We write intensity to the R channel based on closeness
                     if (diff > threshold) {
                         // V_last_valid > V_n. V_n is smaller (closer), so V_n is the edge.
-                        float intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
+                        intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
                         edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
                         atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
+                        edgeFound = true;
                     } else if (-diff > threshold) {
                         // V_n > V_last_valid. V_last_valid is smaller (closer), so V_last_valid is the edge.
-                        float intensity = clamp(params.emphasisDist / v_last_valid, 0.0, 1.0);
+                        intensity = clamp(params.emphasisDist / v_last_valid, 0.0, 1.0);
                         uint2 lastCoords = isRowScan ? uint2(uint(last_valid_idx), lineIndex) : uint2(lineIndex, uint(last_valid_idx));
                         edgeTex.write(float4(intensity, intensity, intensity, 1), lastCoords);
                         
@@ -153,6 +160,46 @@ class EdgeDetectorGPU {
                         if (lastPX < params.patchGridX && lastPY < params.patchGridY) {
                              uint lastPatchIdx = lastPY * params.patchGridX + lastPX;
                              atomic_fetch_add_explicit(&patchCounts[lastPatchIdx], 1, memory_order_relaxed);
+                        }
+                        // We don't mark edgeFound = true here because we want to potentially mark the CURRENT pixel as a crease 
+                        // even if the PREVIOUS pixel was an occlusion edge.
+                    }
+                }
+                
+                // 2. Crease Detection (Laplacian / Curvature)
+                // Only if no edge was found at this specific pixel yet, to avoid overdraw/atomic contention
+                // (Though atomic contention is low, and overdraw is fine).
+                if (!edgeFound && params.creaseT > 0.0001) {
+                    bool canCheck = false;
+                    // Check bounds for neighbors (+/- 1 pixel)
+                    // We use immediate neighbors for sharpest crease detection, ignoring 'step'
+                    if (isRowScan) {
+                        if (coords.x >= 1 && coords.x < params.imgWidth - 1) canCheck = true;
+                    } else {
+                        if (coords.y >= 1 && coords.y < params.imgHeight - 1) canCheck = true;
+                    }
+                    
+                    if (canCheck) {
+                        int2 prevOffset = isRowScan ? int2(-1, 0) : int2(0, -1);
+                        int2 nextOffset = isRowScan ? int2(1, 0) : int2(0, 1);
+                        
+                        // Use explicit offsets with read()
+                        float v_prev = depthTex.read(coords, prevOffset).r;
+                        float v_next = depthTex.read(coords, nextOffset).r;
+                        
+                        // Verify valid neighbors
+                        if (v_prev > 0.001 && v_next > 0.001) {
+                            // Laplacian: |v_prev + v_next - 2*v_curr|
+                            float laplacian = abs(v_prev + v_next - 2.0 * v_n);
+                            
+                            // Adaptive threshold: increases with depth (squared or linear).
+                            // Using linear proportionality similar to occlusion threshold is robust.
+                            // Threshold = v_n * creaseT
+                            if (laplacian > v_n * params.creaseT) {
+                                intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
+                                edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
+                                atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
+                            }
                         }
                     }
                 }
@@ -287,6 +334,7 @@ class EdgeDetectorGPU {
             patchGridY: UInt32(gridM),
             rowColSkip: UInt32(rowColSkipK),
             thresholdT: sensitivityT,
+            creaseT: sensitivityCreaseT,
             emphasisDist: edgeEmphasisDistance
         )
         
@@ -406,6 +454,7 @@ class EdgeDetectorGPU {
         var patchGridY: UInt32
         var rowColSkip: UInt32
         var thresholdT: Float
+        var creaseT: Float
         var emphasisDist: Float
     }
     
