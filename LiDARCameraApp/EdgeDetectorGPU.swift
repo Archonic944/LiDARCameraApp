@@ -19,11 +19,9 @@ class EdgeDetectorGPU {
     // T in Algorithm 1, controls sensitivity (lower T = more sensitive)
     var sensitivityT: Float = 0.065
     
-    // Threshold for Laplacian crease detection (lower = more sensitive to soft corners)
     // Threshold for Normal-based crease detection (Cosine similarity).
-    // 0.96 corresponds to approx 16 degrees difference.
-    // Lower (e.g. 0.9) = Only very sharp turns. Higher (e.g. 0.99) = Very sensitive to curves.
-    var sensitivityCreaseT: Float = 0.96
+    // 0.85 corresponds to approx 31 degrees difference.
+    var sensitivityCreaseT: Float = 0.85
     
     // N patches horizontally (e.g., 32 for 640/32=20 pixel wide patches)
     var gridN: Int = 32
@@ -78,157 +76,156 @@ class EdgeDetectorGPU {
         uint patchGridY;    // M patches vertically
         uint rowColSkip;    // K parameter
         float thresholdT;   // T parameter for Occlusion
-        float creaseT;      // Cosine Threshold for Creases (e.g. 0.98)
+        float creaseT;      // Cosine Threshold for Creases (e.g. 0.85 for ~30 deg)
         float emphasisDist; // Distance where edges start to fade
     };
 
-    // Helper: Compute surface normal at a pixel
-    // We use a simple cross product of the gradients in X and Y.
-    // We assume a 'unit' pixel step in X/Y corresponds to a small metric distance (e.g. 2mm)
-    // for the purpose of normal estimation. This is an approximation but sufficient for edge detection.
-    float3 get_normal(texture2d<float, access::read> depthTex, uint2 c, uint width, uint height) {
-        float dC = depthTex.read(c).r;
+    // Helper: 3x3 Box Filter for robust depth
+    // Reduces "sparkle" noise from LiDAR before calculating derivatives
+    float get_smoothed_depth(texture2d<float, access::read> depthTex, uint2 c) {
+        float sum = 0.0;
+        float validWeight = 0.0;
         
-        // Check bounds
-        if (c.x + 1 >= width || c.y + 1 >= height) return float3(0, 0, 1);
+        // Simple cross kernel (5-tap) is faster and usually sufficient
+        int2 offsets[5] = {int2(0,0), int2(1,0), int2(-1,0), int2(0,1), int2(0,-1)};
         
-        float dR = depthTex.read(c + uint2(1, 0)).r;
-        float dU = depthTex.read(c + uint2(0, 1)).r;
+        for (int i = 0; i < 5; i++) {
+             uint2 samplePos = uint2(int2(c) + offsets[i]);
+             float d = depthTex.read(samplePos).r;
+             if (d > 0.001) {
+                 sum += d;
+                 validWeight += 1.0;
+             }
+        }
         
-        // Invalid depth check
-        if (dC < 0.001 || dR < 0.001 || dU < 0.001) return float3(0, 0, 1);
+        return (validWeight > 0.0) ? (sum / validWeight) : 0.0;
+    }
 
-        // Gradients
-        // We scale the Z difference to make the normal sensitive enough.
-        // A scale of 100.0 means 1cm depth diff ~ 1 unit pixel shift.
-        float dz_dx = (dR - dC) * 100.0; 
-        float dz_dy = (dU - dC) * 100.0;
+    // Helper: Compute surface normal with depth-dependent scale approximation
+    float3 get_normal(texture2d<float, access::read> depthTex, uint2 c, uint width, uint height) {
+        float dC = get_smoothed_depth(depthTex, c);
         
-        // Tangent vectors: T1 = (1, 0, dz_dx), T2 = (0, 1, dz_dy)
-        // Normal = normalize(cross(T1, T2))
-        // Cross product simplified: (-dz_dx, -dz_dy, 1)
-        return normalize(float3(-dz_dx, -dz_dy, 1.0));
+        if (dC < 0.001) return float3(0, 0, 1);
+        
+        // Neighbors
+        uint2 cR = c + uint2(1, 0);
+        uint2 cU = c + uint2(0, 1);
+        
+        if (cR.x >= width || cU.y >= height) return float3(0, 0, 1);
+        
+        float dR = get_smoothed_depth(depthTex, cR);
+        float dU = get_smoothed_depth(depthTex, cU);
+        
+        if (dR < 0.001 || dU < 0.001) return float3(0, 0, 1);
+
+        // Estimate pixel size in meters at this depth.
+        // Approx: 640px width, ~60deg FOV -> ~1m width at 1m depth.
+        // So 1 pixel ~ 1/640 meters ~= 0.0015 meters * depth.
+        float pixelMetricSize = dC * 0.0015;
+        
+        // Derivatives
+        float dz_dx = dR - dC;
+        float dz_dy = dU - dC;
+        
+        // Tangent vectors: 
+        // vX = (pixelSize, 0, dz_dx)
+        // vY = (0, pixelSize, dz_dy)
+        float3 vX = float3(pixelMetricSize, 0.0, dz_dx);
+        float3 vY = float3(0.0, pixelMetricSize, dz_dy);
+        
+        // Normal = normalize(cross(vX, vY))
+        return normalize(cross(vX, vY));
     }
 
     // MARK: - Algorithm 1: P_Scan Core Logic
-    // Each GPU thread processes one entire Row or Column to maintain the serial nature 
-    // of the "last_valid" tracking required by Algorithm 1.
     void p_scan_line(
         texture2d<float, access::read> depthTex,
         texture2d<float, access::write> edgeTex,
-        device atomic_uint* patchCounts, // To track where edges are found (for Alg 2)
-        constant uint8_t* patchFlags,    // F: boolean flags from previous frame
+        device atomic_uint* patchCounts, 
+        constant uint8_t* patchFlags,   
         constant EdgeGenParams& params,
-        uint lineIndex,                  // The row (Y) or column (X) index
-        bool isRowScan                   // True = Scanning X, False = Scanning Y
+        uint lineIndex,                  
+        bool isRowScan                   
     ) {
         uint length = isRowScan ? params.imgWidth : params.imgHeight;
         
-        // State variables from Source [53]
+        // State variables
         float v_last_valid = 0.0;
         int last_valid_idx = -1;
+        float3 n_last_valid = float3(0,0,1);
         
-        // Step K (rowColSkip)
         uint step = params.rowColSkip;
         
-        // Iterate n = 0 to N, stepping by K [Source 92]
         for (uint n = 0; n < length; n += step) {
             
-            // Determine coordinates
             uint2 coords = isRowScan ? uint2(n, lineIndex) : uint2(lineIndex, n);
             
-            // Determine current patch index
+            // Patch management
             uint patchW = params.imgWidth / params.patchGridX;
             uint patchH = params.imgHeight / params.patchGridY;
-            
-            uint pX = coords.x / patchW;
-            uint pY = coords.y / patchH;
-            
-            // Bounds safety
-            if (pX >= params.patchGridX) pX = params.patchGridX - 1;
-            if (pY >= params.patchGridY) pY = params.patchGridY - 1;
-            
+            uint pX = min(coords.x / patchW, params.patchGridX - 1);
+            uint pY = min(coords.y / patchH, params.patchGridY - 1);
             uint patchIdx = pY * params.patchGridX + pX;
             
-            // ALGORITHM 2 Optimization:
-            // Skip scanning logic if the patch flag is false (0) [Source 73]
             if (patchFlags[patchIdx] == 0) {
-                // If this patch is not flagged, we reset valid history to prevent "teleporting" edges.
                 last_valid_idx = -1; 
                 continue; 
             }
 
-            // Fetch Vn
-            float v_n = depthTex.read(coords).r;
+            // Read Smoothed Depth for stability
+            float v_n = get_smoothed_depth(depthTex, coords);
             
-            if (v_n > 0.001) { // if Vn != 0 (valid pixel)
+            if (v_n > 0.001) {
                 
                 bool edgeFound = false;
                 float intensity = 0.0;
                 
-                // 1. Occlusion Detection (Depth Jump)
+                // Calculate Normal for current pixel
+                float3 n_curr = get_normal(depthTex, coords, params.imgWidth, params.imgHeight);
+                
                 if (last_valid_idx != -1) {
-                    // threshold = Min(Vn, Vlast_valid) * T [Source 53]
-                    float threshold = min(v_n, v_last_valid) * params.thresholdT;
                     
+                    // --- 1. Occlusion (Jump) ---
+                    float threshold = min(v_n, v_last_valid) * params.thresholdT;
                     float diff = v_last_valid - v_n;
                     
-                    if (diff > threshold) {
-                        // V_last_valid > V_n. V_n is smaller (closer), so V_n is the edge.
-                        intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
-                        edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
+                    if (abs(diff) > threshold) {
+                        // Found Jump Edge
+                        float closeDepth = (diff > 0) ? v_n : v_last_valid;
+                        intensity = clamp(params.emphasisDist / closeDepth, 0.0, 1.0);
+                        
+                        uint2 writeCoords = (diff > 0) ? coords : 
+                            (isRowScan ? uint2(uint(last_valid_idx), lineIndex) : uint2(lineIndex, uint(last_valid_idx)));
+                            
+                        edgeTex.write(float4(intensity, intensity, intensity, 1), writeCoords);
                         atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
                         edgeFound = true;
-                    } else if (-diff > threshold) {
-                        // V_n > V_last_valid. V_last_valid is smaller (closer), so V_last_valid is the edge.
-                        intensity = clamp(params.emphasisDist / v_last_valid, 0.0, 1.0);
-                        uint2 lastCoords = isRowScan ? uint2(uint(last_valid_idx), lineIndex) : uint2(lineIndex, uint(last_valid_idx));
-                        edgeTex.write(float4(intensity, intensity, intensity, 1), lastCoords);
+                    } 
+                    
+                    // --- 2. Crease (Normal Angle) ---
+                    else if (params.creaseT < 0.999) {
+                        // Check dot product between current normal and last valid normal
+                        // This effectively checks curvature between the last sample and this one.
                         
-                        // We must update the patch counter for where the LAST pixel was located.
-                        uint lastPX = lastCoords.x / patchW;
-                        uint lastPY = lastCoords.y / patchH;
-                        if (lastPX < params.patchGridX && lastPY < params.patchGridY) {
-                             uint lastPatchIdx = lastPY * params.patchGridX + lastPX;
-                             atomic_fetch_add_explicit(&patchCounts[lastPatchIdx], 1, memory_order_relaxed);
+                        float dotP = dot(n_curr, n_last_valid);
+                        
+                        // If angle is large (dotP small), it's a crease
+                        if (dotP < params.creaseT) {
+                             intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
+                             
+                             // Scale intensity by how "sharp" the crease is? 
+                             // Optional: make it pop more
+                             intensity = max(intensity, 0.5); 
+                             
+                             edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
+                             atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
                         }
-                        edgeFound = true; // Mark found to suppress crease detection
                     }
                 }
                 
-                // 2. Crease Detection (Normal Discontinuity)
-                // Only if no occlusion edge was found at this pixel.
-                // We check the angle between the current pixel's normal and the next pixel's normal.
-                if (!edgeFound && params.creaseT < 0.999) {
-                    
-                    // We only check forward in the scan direction to avoid double processing
-                    // Row Scan: Check Right neighbor. Col Scan: Check Bottom neighbor.
-                    uint2 nextCoords = isRowScan ? coords + uint2(1, 0) : coords + uint2(0, 1);
-                    
-                    if (nextCoords.x < params.imgWidth && nextCoords.y < params.imgHeight) {
-                         float v_next = depthTex.read(nextCoords).r;
-                         if (v_next > 0.001) {
-                            float3 n1 = get_normal(depthTex, coords, params.imgWidth, params.imgHeight);
-                            float3 n2 = get_normal(depthTex, nextCoords, params.imgWidth, params.imgHeight);
-                            
-                            float dotP = dot(n1, n2);
-                            
-                            // If dot product is LESS than threshold, the angle is LARGE -> Edge.
-                            // e.g. Threshold 0.9. Angle 25deg -> dot 0.906 (No Edge). Angle 30deg -> dot 0.866 (Edge).
-                            if (dotP < params.creaseT) {
-                                intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
-                                // Modulate intensity by how sharp the edge is? Optional.
-                                // float strength = (params.creaseT - dotP) / params.creaseT;
-                                
-                                edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
-                                atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
-                            }
-                         }
-                    }
-                }
-                
-                // Update last valid pixel state
+                // Update History
                 v_last_valid = v_n;
+                n_last_valid = n_curr;
                 last_valid_idx = int(n);
             }
         }
