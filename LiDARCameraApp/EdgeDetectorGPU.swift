@@ -20,7 +20,10 @@ class EdgeDetectorGPU {
     var sensitivityT: Float = 0.065
     
     // Threshold for Laplacian crease detection (lower = more sensitive to soft corners)
-    var sensitivityCreaseT: Float = 0.015
+    // Threshold for Normal-based crease detection (Cosine similarity).
+    // 0.96 corresponds to approx 16 degrees difference.
+    // Lower (e.g. 0.9) = Only very sharp turns. Higher (e.g. 0.99) = Very sensitive to curves.
+    var sensitivityCreaseT: Float = 0.96
     
     // N patches horizontally (e.g., 32 for 640/32=20 pixel wide patches)
     var gridN: Int = 32
@@ -75,9 +78,37 @@ class EdgeDetectorGPU {
         uint patchGridY;    // M patches vertically
         uint rowColSkip;    // K parameter
         float thresholdT;   // T parameter for Occlusion
-        float creaseT;      // T parameter for Creases (Laplacian)
+        float creaseT;      // Cosine Threshold for Creases (e.g. 0.98)
         float emphasisDist; // Distance where edges start to fade
     };
+
+    // Helper: Compute surface normal at a pixel
+    // We use a simple cross product of the gradients in X and Y.
+    // We assume a 'unit' pixel step in X/Y corresponds to a small metric distance (e.g. 2mm)
+    // for the purpose of normal estimation. This is an approximation but sufficient for edge detection.
+    float3 get_normal(texture2d<float, access::read> depthTex, uint2 c, uint width, uint height) {
+        float dC = depthTex.read(c).r;
+        
+        // Check bounds
+        if (c.x + 1 >= width || c.y + 1 >= height) return float3(0, 0, 1);
+        
+        float dR = depthTex.read(c + uint2(1, 0)).r;
+        float dU = depthTex.read(c + uint2(0, 1)).r;
+        
+        // Invalid depth check
+        if (dC < 0.001 || dR < 0.001 || dU < 0.001) return float3(0, 0, 1);
+
+        // Gradients
+        // We scale the Z difference to make the normal sensitive enough.
+        // A scale of 100.0 means 1cm depth diff ~ 1 unit pixel shift.
+        float dz_dx = (dR - dC) * 100.0; 
+        float dz_dy = (dU - dC) * 100.0;
+        
+        // Tangent vectors: T1 = (1, 0, dz_dx), T2 = (0, 1, dz_dy)
+        // Normal = normalize(cross(T1, T2))
+        // Cross product simplified: (-dz_dx, -dz_dy, 1)
+        return normalize(float3(-dz_dx, -dz_dy, 1.0));
+    }
 
     // MARK: - Algorithm 1: P_Scan Core Logic
     // Each GPU thread processes one entire Row or Column to maintain the serial nature 
@@ -161,46 +192,38 @@ class EdgeDetectorGPU {
                              uint lastPatchIdx = lastPY * params.patchGridX + lastPX;
                              atomic_fetch_add_explicit(&patchCounts[lastPatchIdx], 1, memory_order_relaxed);
                         }
-                        // We don't mark edgeFound = true here because we want to potentially mark the CURRENT pixel as a crease 
-                        // even if the PREVIOUS pixel was an occlusion edge.
+                        edgeFound = true; // Mark found to suppress crease detection
                     }
                 }
                 
-                // 2. Crease Detection (Laplacian / Curvature)
-                // Only if no edge was found at this specific pixel yet, to avoid overdraw/atomic contention
-                // (Though atomic contention is low, and overdraw is fine).
-                if (!edgeFound && params.creaseT > 0.0001) {
-                    bool canCheck = false;
-                    // Check bounds for neighbors (+/- 1 pixel)
-                    // We use immediate neighbors for sharpest crease detection, ignoring 'step'
-                    if (isRowScan) {
-                        if (coords.x >= 1 && coords.x < params.imgWidth - 1) canCheck = true;
-                    } else {
-                        if (coords.y >= 1 && coords.y < params.imgHeight - 1) canCheck = true;
-                    }
+                // 2. Crease Detection (Normal Discontinuity)
+                // Only if no occlusion edge was found at this pixel.
+                // We check the angle between the current pixel's normal and the next pixel's normal.
+                if (!edgeFound && params.creaseT < 0.999) {
                     
-                    if (canCheck) {
-                        int2 prevOffset = isRowScan ? int2(-1, 0) : int2(0, -1);
-                        int2 nextOffset = isRowScan ? int2(1, 0) : int2(0, 1);
-                        
-                        // Use explicit offsets with read()
-                        float v_prev = depthTex.read(coords, prevOffset).r;
-                        float v_next = depthTex.read(coords, nextOffset).r;
-                        
-                        // Verify valid neighbors
-                        if (v_prev > 0.001 && v_next > 0.001) {
-                            // Laplacian: |v_prev + v_next - 2*v_curr|
-                            float laplacian = abs(v_prev + v_next - 2.0 * v_n);
+                    // We only check forward in the scan direction to avoid double processing
+                    // Row Scan: Check Right neighbor. Col Scan: Check Bottom neighbor.
+                    uint2 nextCoords = isRowScan ? coords + uint2(1, 0) : coords + uint2(0, 1);
+                    
+                    if (nextCoords.x < params.imgWidth && nextCoords.y < params.imgHeight) {
+                         float v_next = depthTex.read(nextCoords).r;
+                         if (v_next > 0.001) {
+                            float3 n1 = get_normal(depthTex, coords, params.imgWidth, params.imgHeight);
+                            float3 n2 = get_normal(depthTex, nextCoords, params.imgWidth, params.imgHeight);
                             
-                            // Adaptive threshold: increases with depth (squared or linear).
-                            // Using linear proportionality similar to occlusion threshold is robust.
-                            // Threshold = v_n * creaseT
-                            if (laplacian > v_n * params.creaseT) {
+                            float dotP = dot(n1, n2);
+                            
+                            // If dot product is LESS than threshold, the angle is LARGE -> Edge.
+                            // e.g. Threshold 0.9. Angle 25deg -> dot 0.906 (No Edge). Angle 30deg -> dot 0.866 (Edge).
+                            if (dotP < params.creaseT) {
                                 intensity = clamp(params.emphasisDist / v_n, 0.0, 1.0);
+                                // Modulate intensity by how sharp the edge is? Optional.
+                                // float strength = (params.creaseT - dotP) / params.creaseT;
+                                
                                 edgeTex.write(float4(intensity, intensity, intensity, 1), coords);
                                 atomic_fetch_add_explicit(&patchCounts[patchIdx], 1, memory_order_relaxed);
                             }
-                        }
+                         }
                     }
                 }
                 
