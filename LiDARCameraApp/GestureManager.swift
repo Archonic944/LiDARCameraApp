@@ -11,6 +11,8 @@ import UIKit
 protocol GestureManagerDelegate: AnyObject {
     func gestureManager(_ manager: GestureManager, didTapAt point: CGPoint)
     func gestureManagerDidDoubleTap(_ manager: GestureManager)
+    func gestureManagerDidSwipeUp(_ manager: GestureManager)
+    func gestureManagerDidSwipeDown(_ manager: GestureManager)
 }
 
 /// Manages tap gestures and focus indicator animations
@@ -107,8 +109,8 @@ class GestureManager {
         bottomEdgeIndicator.frame = CGRect(x: 0, y: bounds.height - thickness, width: bounds.width, height: thickness)
     }
 
-    /// Adds tap gesture recognizers to the specified view
-    func addTapGesture(to view: UIView) {
+    /// Adds gesture recognizers to the specified view
+    func addGestures(to view: UIView) {
         // Single tap gesture
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tapGesture.numberOfTapsRequired = 1
@@ -121,6 +123,16 @@ class GestureManager {
 
         // Require double tap to fail before single tap fires (prevents both from firing)
         tapGesture.require(toFail: doubleTapGesture)
+        
+        // Swipe up gesture
+        let swipeUp = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeUp(_:)))
+        swipeUp.direction = .up
+        view.addGestureRecognizer(swipeUp)
+        
+        // Swipe down gesture
+        let swipeDown = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeDown(_:)))
+        swipeDown.direction = .down
+        view.addGestureRecognizer(swipeDown)
     }
 
     // MARK: - Touch Tracking
@@ -214,6 +226,14 @@ class GestureManager {
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
         // Notify delegate (no visual feedback needed for reset)
         delegate?.gestureManagerDidDoubleTap(self)
+    }
+    
+    @objc private func handleSwipeUp(_ gesture: UISwipeGestureRecognizer) {
+        delegate?.gestureManagerDidSwipeUp(self)
+    }
+    
+    @objc private func handleSwipeDown(_ gesture: UISwipeGestureRecognizer) {
+        delegate?.gestureManagerDidSwipeDown(self)
     }
 
     // MARK: - Visual Feedback

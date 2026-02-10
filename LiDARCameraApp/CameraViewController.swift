@@ -33,6 +33,9 @@ class CameraViewController: UIViewController {
 
     // Gesture management
     private var gestureManager: GestureManager!
+    
+    // Current depth level (0: short, 1: medium, 2: long)
+    private var currentDepthLevelIndex: Int = 1
 
     // UI components
     private var depthPreviewView: UIImageView!
@@ -55,6 +58,7 @@ class CameraViewController: UIViewController {
         super.viewDidLoad()
         setupDepthPreviewView()
         setupDebugLabel()
+        setupGestureManager()
         if FeatureFlags.tuningMode {
             setupDisparityControls()
         }
@@ -107,11 +111,11 @@ class CameraViewController: UIViewController {
         ])
     }
 
-    /// Sets up gesture manager for tap-to-calibrate
+    /// Sets up gesture manager for tap-to-calibrate and depth range cycling
     private func setupGestureManager() {
         gestureManager = GestureManager(parentView: view)
         gestureManager.delegate = self
-        gestureManager.addTapGesture(to: depthPreviewView)
+        gestureManager.addGestures(to: depthPreviewView)
         depthPreviewView.isUserInteractionEnabled = true
     }
 
@@ -390,9 +394,43 @@ extension CameraViewController: GestureManagerDelegate {
     }
 
     func gestureManagerDidDoubleTap(_ manager: GestureManager) {
-        // Reset to default depth range
-        depthProcessor.resetToDefaultRange()
+        // Reset to default depth range (Medium)
+        currentDepthLevelIndex = 1
+        updateDepthRangeToCurrentLevel()
         print("Reset depth range to default values")
+    }
+    
+    func gestureManagerDidSwipeUp(_ manager: GestureManager) {
+        // Increase depth level (move towards Long)
+        if currentDepthLevelIndex < DepthLevels.all.count - 1 {
+            currentDepthLevelIndex += 1
+            updateDepthRangeToCurrentLevel()
+            hapticManager.fireTransientPulse(intensity: 0.8, sharpness: 0.5)
+        }
+    }
+    
+    func gestureManagerDidSwipeDown(_ manager: GestureManager) {
+        // Decrease depth level (move towards Short)
+        if currentDepthLevelIndex > 0 {
+            currentDepthLevelIndex -= 1
+            updateDepthRangeToCurrentLevel()
+            hapticManager.fireTransientPulse(intensity: 0.6, sharpness: 0.3)
+        }
+    }
+    
+    private func updateDepthRangeToCurrentLevel() {
+        let level = DepthLevels.all[currentDepthLevelIndex]
+        depthProcessor.minDisparity = level.min
+        depthProcessor.maxDisparity = level.max
+        
+        // Update sliders if in tuning mode
+        if FeatureFlags.tuningMode {
+            minSlider.value = level.min
+            maxSlider.value = level.max
+            updateDisparityLabelsAndHint()
+        }
+        
+        print("Depth level changed to index \(currentDepthLevelIndex): \(level.min)m - \(level.max)m")
     }
 }
 
@@ -454,7 +492,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Update depth UI on main thread
         Task { @MainActor in
             self.depthPreviewView.image = UIImage(cgImage: depthImage)
-        }E
+        }
     }
 }
 

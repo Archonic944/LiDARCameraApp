@@ -81,10 +81,10 @@ class DepthProcessor {
     // MARK: - Properties
 
     /// Default minimum depth value in meters (closest distance)
-    public static var defaultMinDepth: Float = 1.321
+    public static var defaultMinDepth: Float = DepthLevels.medium.min
 
     /// Default maximum depth value in meters (farthest distance)
-    public static var defaultMaxDepth: Float = 1.639
+    public static var defaultMaxDepth: Float = DepthLevels.medium.max
 
     /// Aperture size; the radius of the region sampled (0-1)
     public static var APERTURE_SIZE = 0.2

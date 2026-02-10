@@ -21,3 +21,11 @@ enum FeatureFlags {
     }
 }
 
+struct DepthLevels {
+    static let short: (min: Float, max: Float) = (0.3, 0.35)
+    static let medium: (min: Float, max: Float) = (1.4, 1.5)
+    static let long: (min: Float, max: Float) = (2.0, 2.1)
+    
+    static let all: [(min: Float, max: Float)] = [short, medium, long]
+}
+
