@@ -173,14 +173,14 @@ class HapticFeedbackManager {
             if isAlertMode {
                 print("😅 Alert Mode DEACTIVATED")
             }
-            isAlertMode = false
+            //isAlertMode = false
         }
         
         if alertFrameCounter >= 3 {
             if !isAlertMode {
                 print("🚨 Alert Mode ACTIVATED")
             }
-            isAlertMode = true
+            //isAlertMode = true
         }
     }
 
