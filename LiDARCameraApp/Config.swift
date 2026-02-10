@@ -29,3 +29,7 @@ struct DepthLevels {
     static let all: [(min: Float, max: Float)] = [short, medium, long]
 }
 
+struct AppConfig {
+    static let baseApertureSize: Double = 0.15
+}
+

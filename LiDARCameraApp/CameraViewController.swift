@@ -418,6 +418,19 @@ extension CameraViewController: GestureManagerDelegate {
         }
     }
     
+    func gestureManagerDidBeginPress(_ manager: GestureManager) {
+        // Immediately reduce aperture size by 1/3
+        depthProcessor.apertureSize = AppConfig.baseApertureSize * (2.0/3.0)
+        hapticManager.fireTransientPulse(intensity: 0.4, sharpness: 0.8)
+        print("Aperture reduced: \(depthProcessor.apertureSize)")
+    }
+    
+    func gestureManagerDidEndPress(_ manager: GestureManager) {
+        // Restore base aperture size
+        depthProcessor.apertureSize = AppConfig.baseApertureSize
+        print("Aperture restored: \(depthProcessor.apertureSize)")
+    }
+    
     private func updateDepthRangeToCurrentLevel() {
         let level = DepthLevels.all[currentDepthLevelIndex]
         depthProcessor.minDisparity = level.min
@@ -457,7 +470,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         hapticManager.updateProximityAlert(isClose: isTooClose)
 
         // Surface analysis: detect normal changes and depth drops in center aperture
-        let result = surfaceAnalyzer.analyze(depthMap: processedDepthMap)
+        let result = surfaceAnalyzer.analyze(depthMap: processedDepthMap, apertureSize: depthProcessor.apertureSize)
         if result.shouldClick {
             hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 1.0)
         }

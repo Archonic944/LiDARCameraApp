@@ -87,7 +87,7 @@ class DepthProcessor {
     public static var defaultMaxDepth: Float = DepthLevels.medium.max
 
     /// Aperture size; the radius of the region sampled (0-1)
-    public static var APERTURE_SIZE = 0.15
+    public var apertureSize: Double = AppConfig.baseApertureSize
 
     /// Minimum depth value in meters (closest distance in range)
     var minDisparity: Float = DepthProcessor.defaultMinDepth
@@ -216,7 +216,8 @@ class DepthProcessor {
     ///   - buffer: Pixel buffer (Float32)
     ///   - apertureSize: Size of the center region to sample (0.0 to 1.0, as fraction of image)
     /// - Returns: Maximum value in the aperture
-    func sampleCenterMax(from buffer: CVPixelBuffer, apertureSize: CGFloat = APERTURE_SIZE) -> Float {
+    func sampleCenterMax(from buffer: CVPixelBuffer, apertureSize: CGFloat? = nil) -> Float {
+        let actualApertureSize = apertureSize ?? CGFloat(self.apertureSize)
         let width = CVPixelBufferGetWidth(buffer)
         let height = CVPixelBufferGetHeight(buffer)
 
@@ -232,8 +233,8 @@ class DepthProcessor {
         // Calculate aperture bounds (center region)
         let centerX = width / 2
         let centerY = height / 2
-        let apertureWidth = Int(CGFloat(width) * apertureSize)
-        let apertureHeight = Int(CGFloat(height) * apertureSize)
+        let apertureWidth = Int(CGFloat(width) * actualApertureSize)
+        let apertureHeight = Int(CGFloat(height) * actualApertureSize)
 
         let startX = max(0, centerX - apertureWidth / 2)
         let endX = min(width, centerX + apertureWidth / 2)
@@ -261,7 +262,8 @@ class DepthProcessor {
     ///   - depthMap: Depth pixel buffer in METERS
     ///   - apertureSize: Size of the center region to sample (0.0 to 1.0, as fraction of image)
     /// - Returns: Average depth in METERS
-    func sampleCenterDepth(from depthMap: CVPixelBuffer, apertureSize: CGFloat = APERTURE_SIZE) -> Float {
+    func sampleCenterDepth(from depthMap: CVPixelBuffer, apertureSize: CGFloat? = nil) -> Float {
+        let actualApertureSize = apertureSize ?? CGFloat(self.apertureSize)
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 
@@ -277,8 +279,8 @@ class DepthProcessor {
         // Calculate aperture bounds (center region)
         let centerX = width / 2
         let centerY = height / 2
-        let apertureWidth = Int(CGFloat(width) * apertureSize)
-        let apertureHeight = Int(CGFloat(height) * apertureSize)
+        let apertureWidth = Int(CGFloat(width) * actualApertureSize)
+        let apertureHeight = Int(CGFloat(height) * actualApertureSize)
 
         let startX = max(0, centerX - apertureWidth / 2)
         let endX = min(width, centerX + apertureWidth / 2)

@@ -41,9 +41,11 @@ class SurfaceAnalyzer {
     // MARK: - Analysis
 
     /// Analyzes the center aperture of a depth map for surface normal changes and depth drops.
-    /// - Parameter depthMap: Oriented Float32 depth buffer in meters
+    /// - Parameters:
+    ///   - depthMap: Oriented Float32 depth buffer in meters
+    ///   - apertureSize: Size of the aperture region (0-1)
     /// - Returns: Analysis result indicating whether a haptic click should fire
-    func analyze(depthMap: CVPixelBuffer) -> Result {
+    func analyze(depthMap: CVPixelBuffer, apertureSize: Double = 0.15) -> Result {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 
@@ -56,12 +58,11 @@ class SurfaceAnalyzer {
 
         let floatBuffer = baseAddress.assumingMemoryBound(to: Float.self)
 
-        // Calculate aperture bounds (center 20% region)
-        let apertureSize = 0.2
+        // Calculate aperture bounds
         let centerX = width / 2
         let centerY = height / 2
-        let apertureW = Int(Double(width) * apertureSize)
-        let apertureH = Int(Double(height) * apertureSize)
+        let apertureW = Int(apertureSize * Double(width))
+        let apertureH = Int(apertureSize * Double(height))
 
         // -1 on end bounds because we sample x+1 and y+1 for derivatives
         let startX = max(0, centerX - apertureW / 2)

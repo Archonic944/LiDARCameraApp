@@ -13,6 +13,8 @@ protocol GestureManagerDelegate: AnyObject {
     func gestureManagerDidDoubleTap(_ manager: GestureManager)
     func gestureManagerDidSwipeUp(_ manager: GestureManager)
     func gestureManagerDidSwipeDown(_ manager: GestureManager)
+    func gestureManagerDidBeginPress(_ manager: GestureManager)
+    func gestureManagerDidEndPress(_ manager: GestureManager)
 }
 
 /// Manages tap gestures and focus indicator animations
@@ -133,6 +135,11 @@ class GestureManager {
         let swipeDown = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeDown(_:)))
         swipeDown.direction = .down
         view.addGestureRecognizer(swipeDown)
+        
+        // Press gesture (immediate)
+        let pressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+        pressGesture.minimumPressDuration = 0
+        view.addGestureRecognizer(pressGesture)
     }
 
     // MARK: - Touch Tracking
@@ -234,6 +241,17 @@ class GestureManager {
     
     @objc private func handleSwipeDown(_ gesture: UISwipeGestureRecognizer) {
         delegate?.gestureManagerDidSwipeDown(self)
+    }
+    
+    @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            delegate?.gestureManagerDidBeginPress(self)
+        case .ended, .cancelled, .failed:
+            delegate?.gestureManagerDidEndPress(self)
+        default:
+            break
+        }
     }
 
     // MARK: - Visual Feedback
