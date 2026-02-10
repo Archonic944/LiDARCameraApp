@@ -359,22 +359,22 @@ class CameraViewController: UIViewController {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        gestureManager?.updateTouchState(touches: touches, in: view)
+        gestureManager?.handleTouchBegan(touches, in: view)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
-        gestureManager?.updateTouchState(touches: touches, in: view)
+        gestureManager?.handleTouchMoved(touches, in: view)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        gestureManager?.clearTouchState()
+        gestureManager?.handleTouchEnded(touches, in: view)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
-        gestureManager?.clearTouchState()
+        gestureManager?.handleTouchCancelled(touches, in: view)
     }
 }
 
