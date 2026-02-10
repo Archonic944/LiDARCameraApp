@@ -321,6 +321,6 @@ class EdgeAlertManager {
         }
 
         print("🎯 FIRING PULSE (intensity=\(hapticIntensity), sharpness=\(hapticSharpness))")
-        manager.fireTransientPulse(intensity: hapticIntensity, sharpness: hapticSharpness)
+        //manager.fireTransientPulse(intensity: hapticIntensity, sharpness: hapticSharpness)
     }
 }
