@@ -87,7 +87,7 @@ class DepthProcessor {
     public static var defaultMaxDepth: Float = DepthLevels.medium.max
 
     /// Aperture size; the radius of the region sampled (0-1)
-    public static var APERTURE_SIZE = 0.05
+    public static var APERTURE_SIZE = 0.15
 
     /// Minimum depth value in meters (closest distance in range)
     var minDisparity: Float = DepthProcessor.defaultMinDepth
