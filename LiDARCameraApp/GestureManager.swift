@@ -135,17 +135,41 @@ class GestureManager {
         let swipeDown = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeDown(_:)))
         swipeDown.direction = .down
         view.addGestureRecognizer(swipeDown)
-        
-        // Press gesture (immediate)
-        let pressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
-        pressGesture.minimumPressDuration = 0
-        view.addGestureRecognizer(pressGesture)
     }
 
     // MARK: - Touch Tracking
+    
+    private var isPressing = false
 
-    /// Call this from touchesBegan/touchesMoved to update edge holding state
-    func updateTouchState(touches: Set<UITouch>, in view: UIView) {
+    /// Handle touches began
+    func handleTouchBegan(_ touches: Set<UITouch>, in view: UIView) {
+        if !isPressing && !touches.isEmpty {
+            isPressing = true
+            delegate?.gestureManagerDidBeginPress(self)
+        }
+        updateEdgeHoldState(touches: touches, in: view)
+    }
+
+    /// Handle touches moved
+    func handleTouchMoved(_ touches: Set<UITouch>, in view: UIView) {
+        updateEdgeHoldState(touches: touches, in: view)
+    }
+
+    /// Handle touches ended
+    func handleTouchEnded(_ touches: Set<UITouch>, in view: UIView) {
+        if isPressing {
+            isPressing = false
+            delegate?.gestureManagerDidEndPress(self)
+        }
+        clearEdgeHoldState()
+    }
+
+    /// Handle touches cancelled
+    func handleTouchCancelled(_ touches: Set<UITouch>, in view: UIView) {
+        handleTouchEnded(touches, in: view)
+    }
+
+    private func updateEdgeHoldState(touches: Set<UITouch>, in view: UIView) {
         guard let parentView = parentView else { return }
         let bounds = parentView.bounds
 
@@ -178,8 +202,7 @@ class GestureManager {
         updateEdgeState(left: leftHeld, right: rightHeld, top: topHeld, bottom: bottomHeld)
     }
 
-    /// Call this from touchesEnded/touchesCancelled to clear edge holding state
-    func clearTouchState() {
+    private func clearEdgeHoldState() {
         updateEdgeState(left: false, right: false, top: false, bottom: false)
     }
 
@@ -241,17 +264,6 @@ class GestureManager {
     
     @objc private func handleSwipeDown(_ gesture: UISwipeGestureRecognizer) {
         delegate?.gestureManagerDidSwipeDown(self)
-    }
-    
-    @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            delegate?.gestureManagerDidBeginPress(self)
-        case .ended, .cancelled, .failed:
-            delegate?.gestureManagerDidEndPress(self)
-        default:
-            break
-        }
     }
 
     // MARK: - Visual Feedback
