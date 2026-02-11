@@ -39,6 +39,7 @@ class CameraViewController: UIViewController {
 
     // UI components
     private var depthPreviewView: UIImageView!
+    private var apertureCircleView: UIView!
     private var debugLabel: UILabel!
     private var disparityContainer: UIView!
 
@@ -57,6 +58,7 @@ class CameraViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         setupDepthPreviewView()
+        setupApertureCircle()
         setupDebugLabel()
         setupGestureManager()
         if FeatureFlags.tuningMode {
@@ -77,6 +79,7 @@ class CameraViewController: UIViewController {
         super.viewWillLayoutSubviews()
         previewLayer?.frame = view.bounds
         depthPreviewView?.frame = view.bounds
+        layoutApertureCircle()
         gestureManager?.updateEdgeIndicatorFrames()
     }
 
@@ -89,6 +92,28 @@ class CameraViewController: UIViewController {
         depthPreviewView.alpha = 0.8  // Partially transparent
         depthPreviewView.isUserInteractionEnabled = false
         view.addSubview(depthPreviewView)
+    }
+
+    /// Sets up the aperture circle overlay (no fill, white stroke)
+    private func setupApertureCircle() {
+        apertureCircleView = UIView()
+        apertureCircleView.isUserInteractionEnabled = false
+        apertureCircleView.backgroundColor = .clear
+        view.addSubview(apertureCircleView)
+        layoutApertureCircle()
+    }
+
+    private func layoutApertureCircle() {
+        guard let circle = apertureCircleView else { return }
+        let diameter = min(view.bounds.width, view.bounds.height) * CGFloat(depthProcessor.apertureSize)
+        circle.frame = CGRect(x: view.bounds.midX - diameter / 2,
+                              y: view.bounds.midY - diameter / 2,
+                              width: diameter, height: diameter)
+        circle.layer.cornerRadius = diameter / 2
+
+        // Remove old border shape if any, then set border
+        circle.layer.borderWidth = 1.5
+        circle.layer.borderColor = UIColor.white.withAlphaComponent(0.6).cgColor
     }
 
     /// Sets up the debug label for surface analysis readouts
@@ -422,12 +447,14 @@ extension CameraViewController: GestureManagerDelegate {
         // Immediately reduce aperture size by 1/3
         depthProcessor.apertureSize = AppConfig.baseApertureSize * (2.0/3.0)
         hapticManager.fireTransientPulse(intensity: 0.4, sharpness: 0.8)
+        layoutApertureCircle()
         print("Aperture reduced: \(depthProcessor.apertureSize)")
     }
-    
+
     func gestureManagerDidEndPress(_ manager: GestureManager) {
         // Restore base aperture size
         depthProcessor.apertureSize = AppConfig.baseApertureSize
+        layoutApertureCircle()
         print("Aperture restored: \(depthProcessor.apertureSize)")
     }
     
