@@ -472,7 +472,7 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Surface analysis: detect normal changes and depth drops in center aperture
         let result = surfaceAnalyzer.analyze(depthMap: processedDepthMap, apertureSize: depthProcessor.apertureSize)
         if result.shouldClick {
-            //hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 1.0)
+            hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 1.0)
         }
 
         // Update debug label with surface analysis readouts
