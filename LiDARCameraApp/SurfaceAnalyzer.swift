@@ -10,6 +10,10 @@ import Foundation
 import CoreVideo
 import simd
 
+private func clamp(_ value: Float, _ lo: Float, _ hi: Float) -> Float {
+    min(max(value, lo), hi)
+}
+
 class SurfaceAnalyzer {
 
     // MARK: - Configuration
@@ -44,8 +48,11 @@ class SurfaceAnalyzer {
     /// - Parameters:
     ///   - depthMap: Oriented Float32 depth buffer in meters
     ///   - apertureSize: Size of the aperture region (0-1)
+    ///   - rangeMin: Active depth range minimum (meters)
+    ///   - rangeMax: Active depth range maximum (meters)
     /// - Returns: Analysis result indicating whether a haptic click should fire
-    func analyze(depthMap: CVPixelBuffer, apertureSize: Double = 0.15) -> Result {
+    func analyze(depthMap: CVPixelBuffer, apertureSize: Double = 0.15,
+                 rangeMin: Float = 0.5, rangeMax: Float = 2.0) -> Result {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 
@@ -122,15 +129,24 @@ class SurfaceAnalyzer {
             let now = ProcessInfo.processInfo.systemUptime
             let cooldownOK = (now - lastClickTime) >= cooldownInterval
 
-            // Proximity-based sensitivity: quadratic scaling heavily favors close surfaces.
-            // At 0.5m: 4x more sensitive, at 1m: baseline, at 2m: 4x less sensitive.
-            let proximityScale = min(pow(1.0 / max(currentDepth, 0.1), 2.0), 8.0)
+            // Range-aware sensitivity: scale thresholds relative to where the current
+            // depth sits within the active range, not absolute distance.
+            let rangeWidth = max(rangeMax - rangeMin, 0.05)
+            // 0 = at rangeMin (close end), 1 = at rangeMax (far end)
+            let rangePosition = clamp((currentDepth - rangeMin) / rangeWidth, 0, 1)
+            // Mild linear scaling: close end of range is 1.5x more sensitive,
+            // far end is 0.75x. Avoids the extreme swings of 1/d².
+            let proximityScale: Float = 1.5 - 0.75 * rangePosition
 
-            // Normal threshold: closer to 1.0 = more sensitive (smaller angle triggers click)
+            // Scale depth threshold proportionally to range width so narrow ranges
+            // (like short: 0.25m wide) use proportionally smaller thresholds.
+            let baseDepthThreshold = depthDropThreshold * (rangeWidth / 0.3)
+
+            // Normal threshold: closer to 1.0 = more sensitive
             let effectiveNormalThreshold = 1.0 - (1.0 - normalChangeThreshold) / proximityScale
 
-            // Depth threshold: smaller value = more sensitive (smaller depth jump triggers click)
-            let effectiveDepthThreshold = depthDropThreshold / proximityScale
+            // Depth threshold: smaller = more sensitive
+            let effectiveDepthThreshold = baseDepthThreshold / proximityScale
 
             if cooldownOK && (normalDot < effectiveNormalThreshold || depthDelta > effectiveDepthThreshold) {
                 shouldClick = true
