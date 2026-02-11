@@ -88,6 +88,10 @@ class SurfaceAnalyzer {
 
                 guard dC > 0.001 && dC.isFinite else { continue }
 
+                // Skip pixels outside the active depth range (with some margin)
+                let margin = (rangeMax - rangeMin) * 0.25
+                guard dC >= (rangeMin - margin) && dC <= (rangeMax + margin) else { continue }
+
                 let dR = floatBuffer[idx + 1]                   // depth[x+1, y]
                 let dU = floatBuffer[(y + 1) * width + x]       // depth[x, y+1]
 
