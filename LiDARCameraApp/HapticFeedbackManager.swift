@@ -257,7 +257,7 @@ class HapticFeedbackManager {
             let player = try engine.makePlayer(with: pattern)
 
             // Start immediately and let player auto-deallocate
-            //try player.start(atTime: CHHapticTimeImmediate)
+            try player.start(atTime: CHHapticTimeImmediate)
 
             print("💥 Transient pulse fired successfully")
 
