@@ -25,7 +25,8 @@ class GeminiService {
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
     
     func generateContent(prompt: String, image: UIImage, completion: @escaping (Result<String, GeminiError>) -> Void) {
-        guard let apiKey = AppConfig.geminiApiKey, !apiKey.isEmpty, apiKey != "TODO: Add your API key here" else {
+        let apiKey = AppConfig.geminiApiKey
+        guard !apiKey.isEmpty, apiKey != "TODO_ADD_YOUR_API_KEY_HERE" else {
             completion(.failure(.noAPIKey))
             return
         }
