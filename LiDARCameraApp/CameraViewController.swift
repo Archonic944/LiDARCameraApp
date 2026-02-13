@@ -66,6 +66,12 @@ class CameraViewController: UIViewController {
 
     // Cached depth data for tap-to-calibrate
     private var latestDepthData: AVDepthData?
+    
+    // Gemini Analysis State
+    private var pendingAnalysisPrompt: String?
+    private var isAnalyzing: Bool = false
+    private var analysisResultLabel: UILabel!
+    private var analysisOverlay: UIView!
 
     // MARK: - Lifecycle
 
@@ -77,6 +83,7 @@ class CameraViewController: UIViewController {
         setupDebugLabel()
         setupGestureManager()
         setupButtons()
+        setupAnalysisUI()
         if FeatureFlags.tuningMode {
             setupDisparityControls()
         }
@@ -393,13 +400,99 @@ class CameraViewController: UIViewController {
     }
     
     @objc private func onDescribeKeyItemPressed() {
-        // Placeholder for future implementation
-        print("Describe Key Item pressed")
+        guard !isAnalyzing else { return }
+        isAnalyzing = true
+        hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
+        
+        pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text verbatim.\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
+        
+        let settings = AVCapturePhotoSettings()
+        settings.isDepthDataDeliveryEnabled = false // No depth needed for Gemini
+        settings.embedsDepthDataInPhoto = false
+        photoOutput.capturePhoto(with: settings, delegate: self)
+        
+        showAnalysisOverlay(text: "Analyzing...")
     }
     
     @objc private func onDescribeBackgroundPressed() {
-        // Placeholder for future implementation
-        print("Describe Background Items pressed")
+        guard !isAnalyzing else { return }
+        isAnalyzing = true
+        hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
+        
+        pendingAnalysisPrompt = "Scan immediate surroundings. Output phrases separated by periods:\n\nContext: Identify setting and main contents (e.g. 'kitchen, dirty dishes').\n\nHazards: List immediate obstacles (left/right/center).\n\nNavigation: Describe the path ahead ONLY if a clear, open route is visible.\nConstraint: Telegraphic style. Max 30 words total."
+        
+        let settings = AVCapturePhotoSettings()
+        settings.isDepthDataDeliveryEnabled = false
+        settings.embedsDepthDataInPhoto = false
+        photoOutput.capturePhoto(with: settings, delegate: self)
+        
+        showAnalysisOverlay(text: "Analyzing...")
+    }
+    
+    private func setupAnalysisUI() {
+        // Create a container view for the overlay
+        analysisOverlay = UIView()
+        analysisOverlay.translatesAutoresizingMaskIntoConstraints = false
+        analysisOverlay.backgroundColor = UIColor.black.withAlphaComponent(0.85)
+        analysisOverlay.layer.cornerRadius = 16
+        analysisOverlay.layer.borderWidth = 2
+        analysisOverlay.layer.borderColor = UIColor.white.cgColor
+        analysisOverlay.alpha = 0
+        view.addSubview(analysisOverlay)
+        
+        // Create the label for the result
+        analysisResultLabel = UILabel()
+        analysisResultLabel.translatesAutoresizingMaskIntoConstraints = false
+        analysisResultLabel.textColor = .white
+        analysisResultLabel.font = UIFont.preferredFont(forTextStyle: .headline)
+        analysisResultLabel.numberOfLines = 0
+        analysisResultLabel.textAlignment = .center
+        // VoiceOver should treat this as a prominent announcement
+        analysisResultLabel.accessibilityTraits = [.staticText, .header]
+        analysisOverlay.addSubview(analysisResultLabel)
+        
+        NSLayoutConstraint.activate([
+            analysisOverlay.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            analysisOverlay.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            analysisOverlay.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -40),
+            analysisOverlay.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: 0.6),
+            
+            analysisResultLabel.topAnchor.constraint(equalTo: analysisOverlay.topAnchor, constant: 24),
+            analysisResultLabel.bottomAnchor.constraint(equalTo: analysisOverlay.bottomAnchor, constant: -24),
+            analysisResultLabel.leadingAnchor.constraint(equalTo: analysisOverlay.leadingAnchor, constant: 24),
+            analysisResultLabel.trailingAnchor.constraint(equalTo: analysisOverlay.trailingAnchor, constant: -24)
+        ])
+        
+        // Add tap to dismiss
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissAnalysisOverlay))
+        analysisOverlay.addGestureRecognizer(tap)
+    }
+    
+    private func showAnalysisOverlay(text: String) {
+        // Update UI on main thread
+        DispatchQueue.main.async {
+            self.analysisResultLabel.text = text
+            self.analysisOverlay.isHidden = false
+            
+            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0.5, options: [], animations: {
+                self.analysisOverlay.alpha = 1.0
+                self.analysisOverlay.transform = .identity
+            }, completion: { _ in
+                // Move VoiceOver focus to the result label and read it
+                UIAccessibility.post(notification: .layoutChanged, argument: self.analysisResultLabel)
+            })
+        }
+    }
+    
+    @objc private func dismissAnalysisOverlay() {
+        UIView.animate(withDuration: 0.2, animations: {
+            self.analysisOverlay.alpha = 0
+            self.analysisOverlay.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+        }) { _ in
+            self.analysisOverlay.isHidden = true
+            self.analysisResultLabel.text = ""
+            self.isAnalyzing = false
+        }
     }
 
     // MARK: - Camera Permission
@@ -637,12 +730,57 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
 
         if let error = error {
             print("Error capturing photo: \(error.localizedDescription)")
+            if isAnalyzing {
+                showAnalysisOverlay(text: "Error capturing image.")
+                // Reset immediately on capture failure
+                isAnalyzing = false
+            }
             return
         }
 
         guard let data = photo.fileDataRepresentation(),
               let image = UIImage(data: data) else {
             print("Could not get photo data.")
+            if isAnalyzing {
+                 showAnalysisOverlay(text: "Could not capture image data.")
+                 isAnalyzing = false
+            }
+            return
+        }
+
+        // Check if this capture is for Gemini analysis
+        if let prompt = pendingAnalysisPrompt {
+            // Clear pending prompt so we don't re-trigger
+            pendingAnalysisPrompt = nil
+            
+            // Perform analysis
+            GeminiService.shared.generateContent(prompt: prompt, image: image) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    
+                    switch result {
+                    case .success(let text):
+                        self.showAnalysisOverlay(text: text)
+                        // Haptic feedback for success
+                        self.hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 0.8)
+                        
+                    case .failure(let error):
+                        let errorMsg: String
+                        switch error {
+                        case .noAPIKey:
+                            errorMsg = "API Key missing. Please add it to Config.swift."
+                        case .networkError(let err):
+                            errorMsg = "Network error: \(err.localizedDescription)"
+                        case .apiError(let msg):
+                            errorMsg = "Gemini Error: \(msg)"
+                        default:
+                            errorMsg = "Analysis failed. Please try again."
+                        }
+                        self.showAnalysisOverlay(text: errorMsg)
+                        // We keep isAnalyzing = true so the user sees the error overlay
+                    }
+                }
+            }
             return
         }
 
