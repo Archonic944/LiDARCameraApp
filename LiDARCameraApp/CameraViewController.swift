@@ -686,8 +686,9 @@ extension CameraViewController: AVCaptureDepthDataOutputDelegate {
         // Process depth data and orient it to match screen coordinates
         let processedDepthMap = depthProcessor.processDepthData(depthData, orientation: videoOrientation)
 
-        // Check if any part of the scene is closer than 0.25m for alert mode
-        let isTooClose = depthProcessor.checkForMinDistance(in: processedDepthMap, minDistance: 0.25)
+        // Check if any part of the scene is closer than the threshold for alert mode
+        let currentAlertThreshold = DepthLevels.all[currentDepthLevelIndex].alertThreshold
+        let isTooClose = depthProcessor.checkForMinDistance(in: processedDepthMap, minDistance: currentAlertThreshold)
         hapticManager.updateProximityAlert(isClose: isTooClose)
 
         // Surface analysis: detect normal changes and depth drops in center aperture
