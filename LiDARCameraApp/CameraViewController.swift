@@ -51,6 +51,11 @@ class CameraViewController: UIViewController {
     private var shortenButton: UIButton!
     private var lengthenButton: UIButton!
     private var focusButton: UIButton!
+    
+    // Description Buttons
+    private var descriptionStackView: UIStackView!
+    private var describeKeyItemButton: UIButton!
+    private var describeBackgroundButton: UIButton!
 
     // Disparity controls
     private var minLabel: UILabel!
@@ -97,11 +102,12 @@ class CameraViewController: UIViewController {
 
     /// Sets up the action buttons (Shorten, Lengthen, Focus)
     private func setupButtons() {
+        // Core control buttons
         shortenButton = createHighContrastButton(title: "Shorten", action: #selector(onShortenPressed))
         lengthenButton = createHighContrastButton(title: "Lengthen", action: #selector(onLengthenPressed))
         focusButton = createHighContrastButton(title: "Focus", action: #selector(onFocusToggled))
         
-        // VoiceOver Accessibility
+        // VoiceOver Accessibility for core controls
         shortenButton.accessibilityLabel = "Shorten depth range"
         shortenButton.accessibilityHint = "Decreases the maximum distance sensed"
         
@@ -118,12 +124,32 @@ class CameraViewController: UIViewController {
         controlsStackView.distribution = .fillEqually
         controlsStackView.spacing = 20
         view.addSubview(controlsStackView)
+        
+        // Description buttons (Accent color)
+        describeKeyItemButton = createAccentButton(title: "Describe Key Item", action: #selector(onDescribeKeyItemPressed))
+        describeBackgroundButton = createAccentButton(title: "Describe Background Items", action: #selector(onDescribeBackgroundPressed))
+        
+        // VoiceOver Accessibility for descriptions
+        describeKeyItemButton.accessibilityLabel = "Describe and read a key item in the frame, especially an item that you are holding."
+        describeBackgroundButton.accessibilityLabel = "Give a brief overview of your surroundings in the frame."
+
+        descriptionStackView = UIStackView(arrangedSubviews: [describeKeyItemButton, describeBackgroundButton])
+        descriptionStackView.translatesAutoresizingMaskIntoConstraints = false
+        descriptionStackView.axis = .horizontal
+        descriptionStackView.distribution = .fillEqually
+        descriptionStackView.spacing = 20
+        view.addSubview(descriptionStackView)
 
         NSLayoutConstraint.activate([
             controlsStackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -100),
             controlsStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             controlsStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            controlsStackView.heightAnchor.constraint(equalToConstant: 60)
+            controlsStackView.heightAnchor.constraint(equalToConstant: 60),
+            
+            descriptionStackView.bottomAnchor.constraint(equalTo: controlsStackView.topAnchor, constant: -20),
+            descriptionStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            descriptionStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            descriptionStackView.heightAnchor.constraint(equalToConstant: 60)
         ])
     }
 
@@ -132,6 +158,20 @@ class CameraViewController: UIViewController {
         button.setTitle(title, for: .normal)
         button.titleLabel?.font = UIFont.systemFont(ofSize: 18, weight: .bold)
         button.backgroundColor = .black
+        button.setTitleColor(.white, for: .normal)
+        button.layer.cornerRadius = 10
+        button.layer.borderWidth = 3
+        button.layer.borderColor = UIColor.white.cgColor
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+
+    private func createAccentButton(title: String, action: Selector) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setTitle(title, for: .normal)
+        button.titleLabel?.font = UIFont.systemFont(ofSize: 18, weight: .bold)
+        // Use system accent color (indigo or blue) if AccentColor is not defined
+        button.backgroundColor = UIColor(named: "AccentColor") ?? .systemIndigo
         button.setTitleColor(.white, for: .normal)
         button.layer.cornerRadius = 10
         button.layer.borderWidth = 3
@@ -350,6 +390,16 @@ class CameraViewController: UIViewController {
         
         layoutApertureCircle()
         print("Focus toggled: \(isFocusToggled), aperture: \(depthProcessor.apertureSize)")
+    }
+    
+    @objc private func onDescribeKeyItemPressed() {
+        // Placeholder for future implementation
+        print("Describe Key Item pressed")
+    }
+    
+    @objc private func onDescribeBackgroundPressed() {
+        // Placeholder for future implementation
+        print("Describe Background Items pressed")
     }
 
     // MARK: - Camera Permission
