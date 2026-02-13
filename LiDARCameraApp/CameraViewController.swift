@@ -66,6 +66,7 @@ class CameraViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        UIApplication.shared.isIdleTimerDisabled = true;
         setupDepthPreviewView()
         setupApertureCircle()
         setupDebugLabel()
