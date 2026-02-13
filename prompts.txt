@@ -1,13 +1,17 @@
 Describe environment:
 
-"Scan immediate surroundings. Output phrases separated by periods:
+"Scan surroundings for a blind user. Output telegraphic phrases separated by periods.
 
-Context: Identify setting and main contents (e.g. 'kitchen, dirty dishes').
+Obstacles: Immediate hazards ahead (nature/location).
 
-Hazards: List immediate obstacles (left/right/center).
+Surface: Texture, gradient, steps.
 
-Navigation: Describe the path ahead ONLY if a clear, open route is visible.
-Constraint: Telegraphic style. Max 30 words total."
+Sides: Objects to left/right (doors, fences).
+
+Path: Distant aiming points for straight course.
+
+Landmarks: Key reference points.
+Constraint: Max 40 words. No repetition."
 
 Key item:
 

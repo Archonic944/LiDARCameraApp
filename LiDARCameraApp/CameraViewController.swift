@@ -429,7 +429,7 @@ class CameraViewController: UIViewController {
         analysisState = .analyzing
         hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
         
-        pendingAnalysisPrompt = "Scan immediate surroundings. Output phrases separated by periods:\n\nContext: Identify setting and main contents (e.g. 'kitchen, dirty dishes').\n\nHazards: List immediate obstacles (left/right/center).\n\nNavigation: Describe the path ahead ONLY if a clear, open route is visible.\nConstraint: Telegraphic style. Max 30 words total."
+        pendingAnalysisPrompt = "Scan surroundings for a blind user. Output telegraphic phrases separated by periods.\n\nObstacles: Immediate hazards ahead (nature/location).\n\nSurface: Texture, gradient, steps.\n\nSides: Objects to left/right (doors, fences).\n\nPath: Distant aiming points for straight course.\n\nLandmarks: Key reference points.\nConstraint: Max 40 words. No repetition."
         
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .speed
