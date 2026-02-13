@@ -31,5 +31,6 @@ struct DepthLevels {
 
 struct AppConfig {
     static let baseApertureSize: Double = 0.15
+    static var geminiApiKey: String { Secrets.apiKey }
 }
 
