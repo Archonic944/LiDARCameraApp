@@ -68,8 +68,14 @@ class CameraViewController: UIViewController {
     private var latestDepthData: AVDepthData?
     
     // Gemini Analysis State
+    private enum AnalysisState {
+        case idle
+        case analyzing
+        case showingResult
+    }
+    private var analysisState: AnalysisState = .idle
+    
     private var pendingAnalysisPrompt: String?
-    private var isAnalyzing: Bool = false
     private var analysisResultLabel: UILabel!
     private var analysisOverlay: UIView!
 
@@ -133,8 +139,8 @@ class CameraViewController: UIViewController {
         view.addSubview(controlsStackView)
         
         // Description buttons (Accent color)
-        describeKeyItemButton = createAccentButton(title: "Describe Key Item", action: #selector(onDescribeKeyItemPressed))
-        describeBackgroundButton = createAccentButton(title: "Describe Background Items", action: #selector(onDescribeBackgroundPressed))
+        describeKeyItemButton = createAccentButton(title: "Key Item", action: #selector(onDescribeKeyItemPressed))
+        describeBackgroundButton = createAccentButton(title: "Environment", action: #selector(onDescribeBackgroundPressed))
         
         // VoiceOver Accessibility for descriptions
         describeKeyItemButton.accessibilityLabel = "Describe and read a key item in the frame, especially an item that you are holding."
@@ -400,8 +406,10 @@ class CameraViewController: UIViewController {
     }
     
     @objc private func onDescribeKeyItemPressed() {
-        guard !isAnalyzing else { return }
-        isAnalyzing = true
+        guard analysisState != .analyzing else { return }
+        
+        // If showing a result, we can just overwrite it with "Analyzing..." and start new capture
+        analysisState = .analyzing
         hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
         
         pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text verbatim.\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
@@ -416,8 +424,9 @@ class CameraViewController: UIViewController {
     }
     
     @objc private func onDescribeBackgroundPressed() {
-        guard !isAnalyzing else { return }
-        isAnalyzing = true
+        guard analysisState != .analyzing else { return }
+        
+        analysisState = .analyzing
         hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
         
         pendingAnalysisPrompt = "Scan immediate surroundings. Output phrases separated by periods:\n\nContext: Identify setting and main contents (e.g. 'kitchen, dirty dishes').\n\nHazards: List immediate obstacles (left/right/center).\n\nNavigation: Describe the path ahead ONLY if a clear, open route is visible.\nConstraint: Telegraphic style. Max 30 words total."
@@ -493,7 +502,7 @@ class CameraViewController: UIViewController {
         }) { _ in
             self.analysisOverlay.isHidden = true
             self.analysisResultLabel.text = ""
-            self.isAnalyzing = false
+            self.analysisState = .idle
         }
     }
 
@@ -732,9 +741,9 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
 
         if let error = error {
             print("Error capturing photo: \(error.localizedDescription)")
-            if isAnalyzing {
+            if analysisState == .analyzing {
                 showAnalysisOverlay(text: "Error capturing image.")
-                isAnalyzing = false
+                analysisState = .showingResult
             }
             return
         }
@@ -752,9 +761,9 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
             guard let data = photo.fileDataRepresentation(),
                   let image = UIImage(data: data) else {
                 print("Could not get photo data.")
-                if self.isAnalyzing {
+                if self.analysisState == .analyzing {
                     self.showAnalysisOverlay(text: "Could not capture image data.")
-                    DispatchQueue.main.async { self.isAnalyzing = false }
+                    DispatchQueue.main.async { self.analysisState = .showingResult }
                 }
                 return
             }
@@ -771,6 +780,7 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
                             self.showAnalysisOverlay(text: text)
                             // Haptic feedback for success
                             self.hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 0.8)
+                            self.analysisState = .showingResult
                             
                         case .failure(let error):
                             let errorMsg: String
@@ -785,7 +795,7 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
                                 errorMsg = "Analysis failed. Please try again."
                             }
                             self.showAnalysisOverlay(text: errorMsg)
-                            // We keep isAnalyzing = true so the user sees the error overlay
+                            self.analysisState = .showingResult
                         }
                     }
                 }
