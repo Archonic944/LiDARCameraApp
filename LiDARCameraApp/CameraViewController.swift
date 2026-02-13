@@ -334,7 +334,7 @@ class CameraViewController: UIViewController {
         isFocusToggled.toggle()
         
         if isFocusToggled {
-            depthProcessor.apertureSize = AppConfig.baseApertureSize * (2.0/3.0)
+            depthProcessor.apertureSize = AppConfig.baseApertureSize / 5.0
             focusButton.backgroundColor = .white
             focusButton.setTitleColor(.black, for: .normal)
             focusButton.layer.borderColor = UIColor.black.cgColor
