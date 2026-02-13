@@ -36,12 +36,21 @@ class CameraViewController: UIViewController {
     
     // Current depth level (0: short, 1: medium, 2: long)
     private var currentDepthLevelIndex: Int = 1
+    
+    // Focus toggle state
+    private var isFocusToggled: Bool = false
 
     // UI components
     private var depthPreviewView: UIImageView!
     private var apertureCircleView: UIView!
     private var debugLabel: UILabel!
     private var disparityContainer: UIView!
+    
+    // Action Buttons
+    private var controlsStackView: UIStackView!
+    private var shortenButton: UIButton!
+    private var lengthenButton: UIButton!
+    private var focusButton: UIButton!
 
     // Disparity controls
     private var minLabel: UILabel!
@@ -61,6 +70,7 @@ class CameraViewController: UIViewController {
         setupApertureCircle()
         setupDebugLabel()
         setupGestureManager()
+        setupButtons()
         if FeatureFlags.tuningMode {
             setupDisparityControls()
         }
@@ -80,10 +90,54 @@ class CameraViewController: UIViewController {
         previewLayer?.frame = view.bounds
         depthPreviewView?.frame = view.bounds
         layoutApertureCircle()
-        gestureManager?.updateEdgeIndicatorFrames()
     }
 
     // MARK: - Setup
+
+    /// Sets up the action buttons (Shorten, Lengthen, Focus)
+    private func setupButtons() {
+        shortenButton = createHighContrastButton(title: "Shorten", action: #selector(onShortenPressed))
+        lengthenButton = createHighContrastButton(title: "Lengthen", action: #selector(onLengthenPressed))
+        focusButton = createHighContrastButton(title: "Focus", action: #selector(onFocusToggled))
+        
+        // VoiceOver Accessibility
+        shortenButton.accessibilityLabel = "Shorten depth range"
+        shortenButton.accessibilityHint = "Decreases the maximum distance sensed"
+        
+        lengthenButton.accessibilityLabel = "Lengthen depth range"
+        lengthenButton.accessibilityHint = "Increases the maximum distance sensed"
+        
+        focusButton.accessibilityLabel = "Toggle Focus"
+        focusButton.accessibilityHint = "Reduces aperture size for precise sensing"
+        focusButton.accessibilityTraits = [.button, .selected]
+
+        controlsStackView = UIStackView(arrangedSubviews: [shortenButton, lengthenButton, focusButton])
+        controlsStackView.translatesAutoresizingMaskIntoConstraints = false
+        controlsStackView.axis = .horizontal
+        controlsStackView.distribution = .fillEqually
+        controlsStackView.spacing = 20
+        view.addSubview(controlsStackView)
+
+        NSLayoutConstraint.activate([
+            controlsStackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -100),
+            controlsStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            controlsStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            controlsStackView.heightAnchor.constraint(equalToConstant: 60)
+        ])
+    }
+
+    private func createHighContrastButton(title: String, action: Selector) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setTitle(title, for: .normal)
+        button.titleLabel?.font = UIFont.systemFont(ofSize: 18, weight: .bold)
+        button.backgroundColor = .black
+        button.setTitleColor(.white, for: .normal)
+        button.layer.cornerRadius = 10
+        button.layer.borderWidth = 3
+        button.layer.borderColor = UIColor.white.cgColor
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
 
     /// Sets up the depth preview overlay
     private func setupDepthPreviewView() {
@@ -256,6 +310,46 @@ class CameraViewController: UIViewController {
         depthProcessor.maxDisparity = maxSlider.value
         updateDisparityLabelsAndHint()
     }
+    
+    // MARK: - Button Actions
+    
+    @objc private func onShortenPressed() {
+        if currentDepthLevelIndex > 0 {
+            currentDepthLevelIndex -= 1
+            updateDepthRangeToCurrentLevel()
+            hapticManager.fireTransientPulse(intensity: 0.6, sharpness: 0.3)
+        }
+    }
+    
+    @objc private func onLengthenPressed() {
+        if currentDepthLevelIndex < DepthLevels.all.count - 1 {
+            currentDepthLevelIndex += 1
+            updateDepthRangeToCurrentLevel()
+            hapticManager.fireTransientPulse(intensity: 0.8, sharpness: 0.5)
+        }
+    }
+    
+    @objc private func onFocusToggled() {
+        isFocusToggled.toggle()
+        
+        if isFocusToggled {
+            depthProcessor.apertureSize = AppConfig.baseApertureSize * (2.0/3.0)
+            focusButton.backgroundColor = .white
+            focusButton.setTitleColor(.black, for: .normal)
+            focusButton.layer.borderColor = UIColor.black.cgColor
+            focusButton.accessibilityTraits.insert(.selected)
+            hapticManager.fireTransientPulse(intensity: 0.4, sharpness: 0.8)
+        } else {
+            depthProcessor.apertureSize = AppConfig.baseApertureSize
+            focusButton.backgroundColor = .black
+            focusButton.setTitleColor(.white, for: .normal)
+            focusButton.layer.borderColor = UIColor.white.cgColor
+            focusButton.accessibilityTraits.remove(.selected)
+        }
+        
+        layoutApertureCircle()
+        print("Focus toggled: \(isFocusToggled), aperture: \(depthProcessor.apertureSize)")
+    }
 
     // MARK: - Camera Permission
     private func requestCameraAccess() {
@@ -379,28 +473,6 @@ class CameraViewController: UIViewController {
         settings.embedsDepthDataInPhoto = true
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
-
-    // MARK: - Touch Handling
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesBegan(touches, with: event)
-        gestureManager?.handleTouchBegan(touches, in: view)
-    }
-
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesMoved(touches, with: event)
-        gestureManager?.handleTouchMoved(touches, in: view)
-    }
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesEnded(touches, with: event)
-        gestureManager?.handleTouchEnded(touches, in: view)
-    }
-
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesCancelled(touches, with: event)
-        gestureManager?.handleTouchCancelled(touches, in: view)
-    }
 }
 
 // MARK: - GestureManagerDelegate
@@ -423,39 +495,6 @@ extension CameraViewController: GestureManagerDelegate {
         currentDepthLevelIndex = 1
         updateDepthRangeToCurrentLevel()
         print("Reset depth range to default values")
-    }
-    
-    func gestureManagerDidSwipeUp(_ manager: GestureManager) {
-        // Increase depth level (move towards Long)
-        if currentDepthLevelIndex < DepthLevels.all.count - 1 {
-            currentDepthLevelIndex += 1
-            updateDepthRangeToCurrentLevel()
-            hapticManager.fireTransientPulse(intensity: 0.8, sharpness: 0.5)
-        }
-    }
-    
-    func gestureManagerDidSwipeDown(_ manager: GestureManager) {
-        // Decrease depth level (move towards Short)
-        if currentDepthLevelIndex > 0 {
-            currentDepthLevelIndex -= 1
-            updateDepthRangeToCurrentLevel()
-            hapticManager.fireTransientPulse(intensity: 0.6, sharpness: 0.3)
-        }
-    }
-    
-    func gestureManagerDidBeginPress(_ manager: GestureManager) {
-        // Immediately reduce aperture size by 1/3
-        depthProcessor.apertureSize = AppConfig.baseApertureSize * (2.0/3.0)
-        hapticManager.fireTransientPulse(intensity: 0.4, sharpness: 0.8)
-        layoutApertureCircle()
-        print("Aperture reduced: \(depthProcessor.apertureSize)")
-    }
-
-    func gestureManagerDidEndPress(_ manager: GestureManager) {
-        // Restore base aperture size
-        depthProcessor.apertureSize = AppConfig.baseApertureSize
-        layoutApertureCircle()
-        print("Aperture restored: \(depthProcessor.apertureSize)")
     }
     
     private func updateDepthRangeToCurrentLevel() {
