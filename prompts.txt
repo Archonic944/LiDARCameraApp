@@ -1,0 +1,19 @@
+Describe environment:
+
+"Scan immediate surroundings. Output phrases separated by periods:
+
+Context: Identify setting and main contents (e.g. 'kitchen, dirty dishes').
+
+Hazards: List immediate obstacles (left/right/center).
+
+Navigation: Describe the path ahead ONLY if a clear, open route is visible.
+Constraint: Telegraphic style. Max 30 words total."
+
+Key item:
+
+"Analyze the object held or pointed at.
+
+Visuals: Describe color, shape, and material in under 15 words.
+
+Text: Read prominent text verbatim.
+Constraint: Use telegraphic style (no articles, no filler). Always include visual description."
