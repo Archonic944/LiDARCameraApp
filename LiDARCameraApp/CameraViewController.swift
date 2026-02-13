@@ -407,6 +407,7 @@ class CameraViewController: UIViewController {
         pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text verbatim.\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
         
         let settings = AVCapturePhotoSettings()
+        settings.photoQualityPrioritization = .speed
         settings.isDepthDataDeliveryEnabled = false // No depth needed for Gemini
         settings.embedsDepthDataInPhoto = false
         photoOutput.capturePhoto(with: settings, delegate: self)
@@ -422,6 +423,7 @@ class CameraViewController: UIViewController {
         pendingAnalysisPrompt = "Scan immediate surroundings. Output phrases separated by periods:\n\nContext: Identify setting and main contents (e.g. 'kitchen, dirty dishes').\n\nHazards: List immediate obstacles (left/right/center).\n\nNavigation: Describe the path ahead ONLY if a clear, open route is visible.\nConstraint: Telegraphic style. Max 30 words total."
         
         let settings = AVCapturePhotoSettings()
+        settings.photoQualityPrioritization = .speed
         settings.isDepthDataDeliveryEnabled = false
         settings.embedsDepthDataInPhoto = false
         photoOutput.capturePhoto(with: settings, delegate: self)
@@ -732,68 +734,76 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
             print("Error capturing photo: \(error.localizedDescription)")
             if isAnalyzing {
                 showAnalysisOverlay(text: "Error capturing image.")
-                // Reset immediately on capture failure
                 isAnalyzing = false
             }
             return
         }
 
-        guard let data = photo.fileDataRepresentation(),
-              let image = UIImage(data: data) else {
-            print("Could not get photo data.")
-            if isAnalyzing {
-                 showAnalysisOverlay(text: "Could not capture image data.")
-                 isAnalyzing = false
-            }
-            return
-        }
-
-        // Check if this capture is for Gemini analysis
-        if let prompt = pendingAnalysisPrompt {
-            // Clear pending prompt so we don't re-trigger
+        // Capture state on main thread (or whatever thread callback is on)
+        let prompt = pendingAnalysisPrompt
+        if prompt != nil {
             pendingAnalysisPrompt = nil
+        }
+        
+        // Move heavy processing (data extraction + image decoding) to background
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
             
-            // Perform analysis
-            GeminiService.shared.generateContent(prompt: prompt, image: image) { [weak self] result in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    
-                    switch result {
-                    case .success(let text):
-                        self.showAnalysisOverlay(text: text)
-                        // Haptic feedback for success
-                        self.hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 0.8)
+            guard let data = photo.fileDataRepresentation(),
+                  let image = UIImage(data: data) else {
+                print("Could not get photo data.")
+                if self.isAnalyzing {
+                    self.showAnalysisOverlay(text: "Could not capture image data.")
+                    DispatchQueue.main.async { self.isAnalyzing = false }
+                }
+                return
+            }
+
+            // Check if this capture is for Gemini analysis
+            if let prompt = prompt {
+                // Perform analysis
+                GeminiService.shared.generateContent(prompt: prompt, image: image) { [weak self] result in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
                         
-                    case .failure(let error):
-                        let errorMsg: String
-                        switch error {
-                        case .noAPIKey:
-                            errorMsg = "API Key missing. Please add it to Config.swift."
-                        case .networkError(let err):
-                            errorMsg = "Network error: \(err.localizedDescription)"
-                        case .apiError(let msg):
-                            errorMsg = "Gemini Error: \(msg)"
-                        default:
-                            errorMsg = "Analysis failed. Please try again."
+                        switch result {
+                        case .success(let text):
+                            self.showAnalysisOverlay(text: text)
+                            // Haptic feedback for success
+                            self.hapticManager.fireTransientPulse(intensity: 1.0, sharpness: 0.8)
+                            
+                        case .failure(let error):
+                            let errorMsg: String
+                            switch error {
+                            case .noAPIKey:
+                                errorMsg = "API Key missing. Please add it to Config.swift."
+                            case .networkError(let err):
+                                errorMsg = "Network error: \(err.localizedDescription)"
+                            case .apiError(let msg):
+                                errorMsg = "Gemini Error: \(msg)"
+                            default:
+                                errorMsg = "Analysis failed. Please try again."
+                            }
+                            self.showAnalysisOverlay(text: errorMsg)
+                            // We keep isAnalyzing = true so the user sees the error overlay
                         }
-                        self.showAnalysisOverlay(text: errorMsg)
-                        // We keep isAnalyzing = true so the user sees the error overlay
                     }
                 }
+                return
             }
-            return
-        }
 
-        // Log depth data info if available
-        if let depth = photo.depthData {
-            logDepthInfo(depth)
-        } else {
-            print("No depth data in this photo.")
-        }
+            // Normal photo capture flow (save to library)
+            // Log depth data info if available
+            if let depth = photo.depthData {
+                self.logDepthInfo(depth)
+            } else {
+                print("No depth data in this photo.")
+            }
 
-        // Save to photo library
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-        print("Photo saved to library.")
+            // Save to photo library
+            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+            print("Photo saved to library.")
+        }
     }
 
     private func logDepthInfo(_ depthData: AVDepthData) {
