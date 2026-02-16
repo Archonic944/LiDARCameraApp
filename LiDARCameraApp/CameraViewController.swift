@@ -37,9 +37,6 @@ class CameraViewController: UIViewController {
     // Current depth level (0: short, 1: medium, 2: long)
     private var currentDepthLevelIndex: Int = 1
     
-    // Focus toggle state
-    private var isFocusToggled: Bool = false
-
     // UI components
     private var depthPreviewView: UIImageView!
     private var apertureCircleView: UIView!
@@ -50,7 +47,6 @@ class CameraViewController: UIViewController {
     private var controlsStackView: UIStackView!
     private var shortenButton: UIButton!
     private var lengthenButton: UIButton!
-    private var focusButton: UIButton!
     
     // Description Buttons
     private var descriptionStackView: UIStackView!
@@ -113,12 +109,11 @@ class CameraViewController: UIViewController {
 
     // MARK: - Setup
 
-    /// Sets up the action buttons (Shorten, Lengthen, Focus)
+    /// Sets up the action buttons (Shorten, Lengthen)
     private func setupButtons() {
         // Core control buttons
         shortenButton = createHighContrastButton(title: "Shorten", action: #selector(onShortenPressed))
         lengthenButton = createHighContrastButton(title: "Lengthen", action: #selector(onLengthenPressed))
-        focusButton = createHighContrastButton(title: "Focus", action: #selector(onFocusToggled))
         
         // VoiceOver Accessibility for core controls
         shortenButton.accessibilityLabel = "Shorten depth range"
@@ -126,12 +121,8 @@ class CameraViewController: UIViewController {
         
         lengthenButton.accessibilityLabel = "Lengthen depth range"
         lengthenButton.accessibilityHint = "Increases the maximum distance sensed"
-        
-        focusButton.accessibilityLabel = "Toggle Focus"
-        focusButton.accessibilityHint = "Reduces aperture size for precise sensing"
-        focusButton.accessibilityTraits = [.button, .selected]
 
-        controlsStackView = UIStackView(arrangedSubviews: [shortenButton, lengthenButton, focusButton])
+        controlsStackView = UIStackView(arrangedSubviews: [shortenButton, lengthenButton])
         controlsStackView.translatesAutoresizingMaskIntoConstraints = false
         controlsStackView.axis = .horizontal
         controlsStackView.distribution = .fillEqually
@@ -381,28 +372,6 @@ class CameraViewController: UIViewController {
             updateDepthRangeToCurrentLevel()
             hapticManager.fireTransientPulse(intensity: 0.8, sharpness: 0.5)
         }
-    }
-    
-    @objc private func onFocusToggled() {
-        isFocusToggled.toggle()
-        
-        if isFocusToggled {
-            depthProcessor.apertureSize = AppConfig.baseApertureSize / 5.0
-            focusButton.backgroundColor = .white
-            focusButton.setTitleColor(.black, for: .normal)
-            focusButton.layer.borderColor = UIColor.black.cgColor
-            focusButton.accessibilityTraits.insert(.selected)
-            hapticManager.fireTransientPulse(intensity: 0.4, sharpness: 0.8)
-        } else {
-            depthProcessor.apertureSize = AppConfig.baseApertureSize
-            focusButton.backgroundColor = .black
-            focusButton.setTitleColor(.white, for: .normal)
-            focusButton.layer.borderColor = UIColor.white.cgColor
-            focusButton.accessibilityTraits.remove(.selected)
-        }
-        
-        layoutApertureCircle()
-        print("Focus toggled: \(isFocusToggled), aperture: \(depthProcessor.apertureSize)")
     }
     
     @objc private func onDescribeKeyItemPressed() {
