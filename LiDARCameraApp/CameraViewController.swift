@@ -381,7 +381,7 @@ class CameraViewController: UIViewController {
         analysisState = .analyzing
         hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
         
-        pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text verbatim.\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
+        pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text on the object verbatim, avoiding text elsewhere..\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
         
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .speed
@@ -398,7 +398,7 @@ class CameraViewController: UIViewController {
         analysisState = .analyzing
         hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
         
-        pendingAnalysisPrompt = "Scan surroundings for a blind user. Output telegraphic phrases separated by periods.\n\nObstacles: Immediate hazards ahead (nature/location).\n\nSurface: Texture, gradient, steps.\n\nSides: Objects to left/right (doors, fences).\n\nPath: Distant aiming points for straight course.\n\nLandmarks: Key reference points.\nConstraint: Max 40 words. No repetition."
+        pendingAnalysisPrompt = "Scan surroundings for a blind user. The photo is a first person photo taken by the user. Output telegraphic phrases separated by periods.\n\nObstacles: Immediate hazards ahead (nature/location).\n\nSurface: Texture, gradient, steps.\n\nSides: Objects to left/right (doors, fences).\n\nPath: Directions to avoid obstacles IMMEDIATLEY IN FRONT OF THE USER. Directions assume the user is facing the same direction as the camera. Example: slightly left, forward 2 steps. Do NOT output directions to avoid obstacles far in front of the user if there are other obstacles closer to the user.\n\nLandmarks: Key reference points.\nConstraint: Max 40 words. No repetition."
         
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .speed
