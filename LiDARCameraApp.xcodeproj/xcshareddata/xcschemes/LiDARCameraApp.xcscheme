@@ -16,8 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "C0A7EA552E9C848C0090C895"
-               BuildableName = "LiDARCameraApp.app"
-               BlueprintName = "LiDARCameraApp"
+               BuildableName = "PocketCane.app"
+               BlueprintName = "PocketCane"
                ReferencedContainer = "container:LiDARCameraApp.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,8 +32,8 @@
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
-      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
-      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      selectedDebuggerIdentifier = ""
+      selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn"
       launchStyle = "0"
       useCustomWorkingDirectory = "NO"
       ignoresPersistentStateOnLaunch = "NO"
@@ -45,8 +45,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C0A7EA552E9C848C0090C895"
-            BuildableName = "LiDARCameraApp.app"
-            BlueprintName = "LiDARCameraApp"
+            BuildableName = "PocketCane.app"
+            BlueprintName = "PocketCane"
             ReferencedContainer = "container:LiDARCameraApp.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -62,8 +62,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C0A7EA552E9C848C0090C895"
-            BuildableName = "LiDARCameraApp.app"
-            BlueprintName = "LiDARCameraApp"
+            BuildableName = "PocketCane.app"
+            BlueprintName = "PocketCane"
             ReferencedContainer = "container:LiDARCameraApp.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

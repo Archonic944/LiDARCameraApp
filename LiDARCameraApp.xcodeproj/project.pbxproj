@@ -7,16 +7,16 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		C0A7EA562E9C848C0090C895 /* LiDARCameraApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LiDARCameraApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0A7EA562E9C848C0090C895 /* PocketCane.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PocketCane.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		C0A7EA682E9C848D0090C895 /* Exceptions for "LiDARCameraApp" folder in "LiDARCameraApp" target */ = {
+		C0A7EA682E9C848D0090C895 /* Exceptions for "LiDARCameraApp" folder in "PocketCane" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = C0A7EA552E9C848C0090C895 /* LiDARCameraApp */;
+			target = C0A7EA552E9C848C0090C895 /* PocketCane */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -24,7 +24,7 @@
 		C0A7EA582E9C848C0090C895 /* LiDARCameraApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				C0A7EA682E9C848D0090C895 /* Exceptions for "LiDARCameraApp" folder in "LiDARCameraApp" target */,
+				C0A7EA682E9C848D0090C895 /* Exceptions for "LiDARCameraApp" folder in "PocketCane" target */,
 			);
 			path = LiDARCameraApp;
 			sourceTree = "<group>";
@@ -53,7 +53,7 @@
 		C0A7EA572E9C848C0090C895 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C0A7EA562E9C848C0090C895 /* LiDARCameraApp.app */,
+				C0A7EA562E9C848C0090C895 /* PocketCane.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -61,9 +61,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C0A7EA552E9C848C0090C895 /* LiDARCameraApp */ = {
+		C0A7EA552E9C848C0090C895 /* PocketCane */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C0A7EA692E9C848D0090C895 /* Build configuration list for PBXNativeTarget "LiDARCameraApp" */;
+			buildConfigurationList = C0A7EA692E9C848D0090C895 /* Build configuration list for PBXNativeTarget "PocketCane" */;
 			buildPhases = (
 				C0A7EA522E9C848C0090C895 /* Sources */,
 				C0A7EA532E9C848C0090C895 /* Frameworks */,
@@ -76,11 +76,11 @@
 			fileSystemSynchronizedGroups = (
 				C0A7EA582E9C848C0090C895 /* LiDARCameraApp */,
 			);
-			name = LiDARCameraApp;
+			name = PocketCane;
 			packageProductDependencies = (
 			);
 			productName = LiDARCameraApp;
-			productReference = C0A7EA562E9C848C0090C895 /* LiDARCameraApp.app */;
+			productReference = C0A7EA562E9C848C0090C895 /* PocketCane.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -112,7 +112,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C0A7EA552E9C848C0090C895 /* LiDARCameraApp */,
+				C0A7EA552E9C848C0090C895 /* PocketCane */,
 			);
 		};
 /* End PBXProject section */
@@ -212,13 +212,13 @@
 				DEVELOPMENT_TEAM = 5W46893AGH;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LiDARCameraApp/Info.plist;
-				INFOPLIST_KEY_NSCameraUsageDescription = "We need the camera!!!! CAMERA!!!!";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Gotta save photos.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PocketCane needs camera access to view your surroundings and help you navigate.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -248,19 +248,19 @@
 				DEVELOPMENT_TEAM = 5W46893AGH;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LiDARCameraApp/Info.plist;
-				INFOPLIST_KEY_NSCameraUsageDescription = "We need the camera!!!! CAMERA!!!!";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Gotta save photos.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PocketCane needs camera access to view your surroundings and help you navigate.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gabe.LiDARCameraApp;
+				PRODUCT_BUNDLE_IDENTIFIER = so.gabe.LiDARCameraApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -282,13 +282,13 @@
 				DEVELOPMENT_TEAM = 5W46893AGH;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LiDARCameraApp/Info.plist;
-				INFOPLIST_KEY_NSCameraUsageDescription = "We need the camera!!!! CAMERA!!!!";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Gotta save photos.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PocketCane needs camera access to view your surroundings and help you navigate.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -440,7 +440,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C0A7EA692E9C848D0090C895 /* Build configuration list for PBXNativeTarget "LiDARCameraApp" */ = {
+		C0A7EA692E9C848D0090C895 /* Build configuration list for PBXNativeTarget "PocketCane" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C0A7EA6A2E9C848D0090C895 /* Debug */,
