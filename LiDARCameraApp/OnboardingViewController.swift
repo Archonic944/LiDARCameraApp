@@ -52,7 +52,7 @@ class OnboardingViewController: UIViewController {
             ),
             (
                 title: "Important Safety Information",
-                body: "PocketCane is a tool, not a safety device. It requires significant practice and will not guarantee your safety.\n\nDo not use PocketCane as your primary means of obstacle avoidance. You are responsible for your safety at all times."
+                body: "PocketCane is a tool, not a safety device. It requires significant practice and will not guarantee your safety. Additionally, the app is heavily experimental and is susceptible to glitches.\n\nDo not use PocketCane as your primary means of obstacle avoidance. You are responsible for your safety at all times."
             ),
             (
                 title: "How It Works",
