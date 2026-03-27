@@ -45,14 +45,15 @@ class SurfaceAnalyzer {
     // MARK: - Analysis
 
     /// Analyzes the center aperture of a depth map for surface normal changes and depth drops.
+    /// Uses full-scale (unclipped) depth values for normal/depth computation.
+    /// Only fires clicks when the average depth is within 70% of rangeMax.
     /// - Parameters:
     ///   - depthMap: Oriented Float32 depth buffer in meters
     ///   - apertureSize: Size of the aperture region (0-1)
-    ///   - rangeMin: Active depth range minimum (meters)
-    ///   - rangeMax: Active depth range maximum (meters)
+    ///   - rangeMax: Active depth range maximum (meters); clicks gated to 70% of this
     /// - Returns: Analysis result indicating whether a haptic click should fire
     func analyze(depthMap: CVPixelBuffer, apertureSize: Double = 0.15,
-                 rangeMin: Float = 0.5, rangeMax: Float = 2.0) -> Result {
+                 rangeMax: Float = 2.0) -> Result {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 
@@ -87,10 +88,6 @@ class SurfaceAnalyzer {
                 let dC = floatBuffer[idx]
 
                 guard dC > 0.001 && dC.isFinite else { continue }
-
-                // Skip pixels outside the active depth range (with some margin)
-                let margin = (rangeMax - rangeMin) * 0.25
-                guard dC >= (rangeMin - margin) && dC <= (rangeMax + margin) else { continue }
 
                 let dR = floatBuffer[idx + 1]                   // depth[x+1, y]
                 let dU = floatBuffer[(y + 1) * width + x]       // depth[x, y+1]
@@ -133,26 +130,10 @@ class SurfaceAnalyzer {
             let now = ProcessInfo.processInfo.systemUptime
             let cooldownOK = (now - lastClickTime) >= cooldownInterval
 
-            // Range-aware sensitivity: scale thresholds relative to where the current
-            // depth sits within the active range, not absolute distance.
-            let rangeWidth = max(rangeMax - rangeMin, 0.05)
-            // 0 = at rangeMin (close end), 1 = at rangeMax (far end)
-            let rangePosition = clamp((currentDepth - rangeMin) / rangeWidth, 0, 1)
-            // Mild linear scaling: close end of range is 1.5x more sensitive,
-            // far end is 0.75x. Avoids the extreme swings of 1/d².
-            let proximityScale: Float = 1.5 - 0.75 * rangePosition
+            // Only fire clicks when the average depth is within 70% of the max range
+            let withinRange = currentDepth <= rangeMax * 0.70
 
-            // Scale depth threshold proportionally to range width so narrow ranges
-            // (like short: 0.25m wide) use proportionally smaller thresholds.
-            let baseDepthThreshold = depthDropThreshold * (rangeWidth / 0.3)
-
-            // Normal threshold: closer to 1.0 = more sensitive
-            let effectiveNormalThreshold = 1.0 - (1.0 - normalChangeThreshold) / proximityScale
-
-            // Depth threshold: smaller = more sensitive
-            let effectiveDepthThreshold = baseDepthThreshold / proximityScale
-
-            if cooldownOK && (normalDot < effectiveNormalThreshold || depthDelta > effectiveDepthThreshold) {
+            if cooldownOK && withinRange && (normalDot < normalChangeThreshold || depthDelta > depthDropThreshold) {
                 shouldClick = true
                 lastClickTime = now
             }
