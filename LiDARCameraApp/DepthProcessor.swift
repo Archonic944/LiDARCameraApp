@@ -96,7 +96,7 @@ class DepthProcessor {
     var maxDisparity: Float = DepthProcessor.defaultMaxDepth
 
     /// Reusable Core Image context for orientation operations
-    private let ciContext = CIContext()
+    private let ciContext = CIContext()       
 
     // MARK: - Public Methods
 
