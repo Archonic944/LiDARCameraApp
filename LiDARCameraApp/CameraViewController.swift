@@ -111,6 +111,8 @@ class CameraViewController: UIViewController {
 
     @objc private func appWillEnterForeground() {
         UIApplication.shared.isIdleTimerDisabled = true
+        // Core Haptics engine dies when backgrounded; rebuild it cleanly
+        hapticManager.resumeAfterBackground()
     }
 
     override func viewWillLayoutSubviews() {

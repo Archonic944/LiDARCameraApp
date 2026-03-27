@@ -61,13 +61,18 @@ class HapticFeedbackManager {
 
         do {
             hapticEngine = try CHHapticEngine()
+            hapticEngine?.isAutoShutdownEnabled = false
 
+            // Let resumeAfterBackground handle foreground restarts;
+            // these handlers only cover unexpected mid-session resets.
             hapticEngine?.resetHandler = { [weak self] in
-                self?.restartEngine()
+                guard let self = self, !self.isManagedRestart else { return }
+                self.restartEngine()
             }
 
             hapticEngine?.stoppedHandler = { [weak self] _ in
-                self?.restartEngine()
+                guard let self = self, !self.isManagedRestart else { return }
+                self.restartEngine()
             }
 
             try hapticEngine?.start()
@@ -77,6 +82,9 @@ class HapticFeedbackManager {
         }
     }
 
+    /// Flag to suppress handler-driven restarts during a managed resume cycle
+    private var isManagedRestart = false
+
     private func restartEngine() {
         do {
             try hapticEngine?.start()
@@ -85,6 +93,33 @@ class HapticFeedbackManager {
             }
         } catch {
             // Engine restart failed; will retry on next reset
+        }
+    }
+
+    /// Cleanly rebuilds the haptic engine after returning from background.
+    /// Tears down the old engine to avoid duplicate players from stale handlers.
+    func resumeAfterBackground() {
+        isManagedRestart = true
+
+        // Tear down existing state
+        renewalTimer?.invalidate()
+        renewalTimer = nil
+        continuousPlayer = nil
+        hapticEngine?.stop()
+        hapticEngine = nil
+
+        // Reset alert state so we don't carry stale alert mode
+        isAlertMode = false
+        alertFrameCounter = 0
+
+        // Rebuild from scratch
+        setupHapticEngine()
+        let wasRunning = isRunning
+        isRunning = false
+        isManagedRestart = false
+
+        if wasRunning {
+            start()
         }
     }
 
