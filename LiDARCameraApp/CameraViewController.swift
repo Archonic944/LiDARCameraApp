@@ -7,7 +7,6 @@
 
 import UIKit
 import AVFoundation
-import Photos
 
 /// Main view controller for the LiDAR camera app
 /// Coordinates camera capture, depth processing, and visualization
@@ -79,7 +78,7 @@ class CameraViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        UIApplication.shared.isIdleTimerDisabled = true;
+        UIApplication.shared.isIdleTimerDisabled = true
         setupDepthPreviewView()
         setupApertureCircle()
         setupDebugLabel()
@@ -93,11 +92,25 @@ class CameraViewController: UIViewController {
 
         // Start continuous haptic feedback
         hapticManager.start()
+
+        // Re-enable idle timer when backgrounding, disable when foregrounding
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground),
+                                               name: UIApplication.willEnterForegroundNotification, object: nil)
     }
 
     deinit {
-        // Stop haptics when view controller is deallocated
+        UIApplication.shared.isIdleTimerDisabled = false
         hapticManager.stop()
+    }
+
+    @objc private func appDidEnterBackground() {
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    @objc private func appWillEnterForeground() {
+        UIApplication.shared.isIdleTimerDisabled = true
     }
 
     override func viewWillLayoutSubviews() {
@@ -190,6 +203,9 @@ class CameraViewController: UIViewController {
         depthPreviewView.contentMode = .scaleAspectFill
         depthPreviewView.alpha = 0.8  // Partially transparent
         depthPreviewView.isUserInteractionEnabled = false
+        depthPreviewView.isAccessibilityElement = true
+        depthPreviewView.accessibilityLabel = "Depth preview"
+        depthPreviewView.accessibilityTraits = .image
         view.addSubview(depthPreviewView)
     }
 
@@ -198,6 +214,7 @@ class CameraViewController: UIViewController {
         apertureCircleView = UIView()
         apertureCircleView.isUserInteractionEnabled = false
         apertureCircleView.backgroundColor = .clear
+        apertureCircleView.isAccessibilityElement = false
         view.addSubview(apertureCircleView)
         layoutApertureCircle()
     }
@@ -381,7 +398,7 @@ class CameraViewController: UIViewController {
         analysisState = .analyzing
         hapticManager.fireTransientPulse(intensity: 0.5, sharpness: 0.5)
         
-        pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text on the object verbatim, avoiding text elsewhere..\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
+        pendingAnalysisPrompt = "Analyze the object held or pointed at.\n\nVisuals: Describe color, shape, and material in under 15 words.\n\nText: Read prominent text on the object verbatim, avoiding text elsewhere.\nConstraint: Use telegraphic style (no articles, no filler). Always include visual description."
         
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .speed
@@ -514,10 +531,7 @@ class CameraViewController: UIViewController {
 
         do {
             // Configure camera device
-            guard let device = getCameraDevice() else {
-                print("No suitable camera found.")
-                return
-            }
+            guard let device = getCameraDevice() else { return }
 
             // Add camera input
             let input = try AVCaptureDeviceInput(device: device)
@@ -538,7 +552,7 @@ class CameraViewController: UIViewController {
             captureSession.startRunning()
 
         } catch {
-            print("Error setting up camera: \(error)")
+            // Camera setup failed
         }
     }
 
@@ -554,9 +568,6 @@ class CameraViewController: UIViewController {
 
         if photoOutput.isDepthDataDeliverySupported {
             photoOutput.isDepthDataDeliveryEnabled = true
-            print("Depth data delivery enabled.")
-        } else {
-            print("Depth data not supported on this device.")
         }
     }
 
@@ -564,7 +575,6 @@ class CameraViewController: UIViewController {
         if captureSession.canAddOutput(depthOutput) {
             captureSession.addOutput(depthOutput)
             depthOutput.isFilteringEnabled = true
-            print("Depth output added.")
         }
 
         let depthQueue = DispatchQueue(label: "com.gabe.depthQueue")
@@ -590,13 +600,6 @@ class CameraViewController: UIViewController {
         view.layer.insertSublayer(previewLayer, at: 0)
     }
 
-    // MARK: - Photo Capture
-    @IBAction func takePhoto(_ sender: Any) {
-        let settings = AVCapturePhotoSettings()
-        settings.isDepthDataDeliveryEnabled = true
-        settings.embedsDepthDataInPhoto = true
-        photoOutput.capturePhoto(with: settings, delegate: self)
-    }
 }
 
 // MARK: - GestureManagerDelegate
@@ -604,10 +607,7 @@ class CameraViewController: UIViewController {
 extension CameraViewController: GestureManagerDelegate {
 
     func gestureManager(_ manager: GestureManager, didTapAt point: CGPoint) {
-        guard let depthData = latestDepthData else {
-            print("No depth data available for calibration")
-            return
-        }
+        guard let depthData = latestDepthData else { return }
 
         // Calibrate depth range to current scene (tap location is irrelevant)
         // TODO Commented for now due to poor functionality and conflicting with other gestures
@@ -618,7 +618,6 @@ extension CameraViewController: GestureManagerDelegate {
         // Reset to default depth range (Medium)
         currentDepthLevelIndex = 1
         updateDepthRangeToCurrentLevel()
-        print("Reset depth range to default values")
     }
     
     private func updateDepthRangeToCurrentLevel() {
@@ -633,7 +632,6 @@ extension CameraViewController: GestureManagerDelegate {
             updateDisparityLabelsAndHint()
         }
         
-        print("Depth level changed to index \(currentDepthLevelIndex): \(level.min)m - \(level.max)m")
     }
 }
 
@@ -709,8 +707,7 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
                     didFinishProcessingPhoto photo: AVCapturePhoto,
                     error: Error?) {
 
-        if let error = error {
-            print("Error capturing photo: \(error.localizedDescription)")
+        if error != nil {
             if analysisState == .analyzing {
                 showAnalysisOverlay(text: "Error capturing image.")
                 analysisState = .showingResult
@@ -730,7 +727,6 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
             
             guard let data = photo.fileDataRepresentation(),
                   let image = UIImage(data: data) else {
-                print("Could not get photo data.")
                 if self.analysisState == .analyzing {
                     self.showAnalysisOverlay(text: "Could not capture image data.")
                     DispatchQueue.main.async { self.analysisState = .showingResult }
@@ -771,38 +767,6 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
                 }
                 return
             }
-
-            // Normal photo capture flow (save to library)
-            // Log depth data info if available
-            if let depth = photo.depthData {
-                self.logDepthInfo(depth)
-            } else {
-                print("No depth data in this photo.")
-            }
-
-            // Save to photo library
-            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-            print("Photo saved to library.")
-        }
-    }
-
-    private func logDepthInfo(_ depthData: AVDepthData) {
-        print("Depth data captured!")
-
-        let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DisparityFloat32)
-        let depthMap = convertedDepth.depthDataMap
-
-        let width = CVPixelBufferGetWidth(depthMap)
-        let height = CVPixelBufferGetHeight(depthMap)
-        print("Depth map size: \(width)x\(height)")
-
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-
-        if let baseAddress = CVPixelBufferGetBaseAddress(depthMap) {
-            let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
-            let centerValue = floatBuffer[Int(width * height / 2)]
-            print("Center depth: \(centerValue) (disparity units)")
         }
     }
 }

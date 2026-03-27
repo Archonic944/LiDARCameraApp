@@ -196,8 +196,14 @@ class OnboardingViewController: UIViewController {
 
     @objc private func onNext() {
         if !hasLiDAR {
-            // Suspend the app (go to home screen). We can't truly "close" an iOS app.
-            UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
+            // Show an alert explaining the device is unsupported; no action to take.
+            let alert = UIAlertController(
+                title: "Device Not Supported",
+                message: "PocketCane requires a LiDAR sensor. Please use an iPhone 12 Pro or later Pro model, or an iPad Pro (2020 or later).",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
             return
         }
 

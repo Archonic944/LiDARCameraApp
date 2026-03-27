@@ -30,15 +30,15 @@ class HapticFeedbackManager {
     /// Intensity range for haptic feedback (0.0 to 1.0)
     /// Note: Values below ~0.4 may not produce perceptible vibration on some devices
     var minimumIntensity: Float = 0.2
-    var maximumIntensity: Float = 1.2
+    var maximumIntensity: Float = 1.0
 
     // MARK: - Alert Mode Properties
     private var alertFrameCounter: Int = 0
     private var isAlertMode: Bool = false
     private var alertOscillationHigh: Bool = false
     
-    // Alert intensities - WIDE oscillation for very noticeable elephant-like pulses
-    private let alertHighIntensity: Float = 4.0
+    // Alert intensities - oscillation for noticeable pulses (Core Haptics range: 0.0–1.0)
+    private let alertHighIntensity: Float = 1.0
     private let alertLowIntensity: Float = 0.3
 
     // MARK: - Initialization
@@ -56,30 +56,24 @@ class HapticFeedbackManager {
     private func setupHapticEngine() {
         // Check if device supports haptics
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
-            print("⚠️ Device does not support haptics")
             return
         }
 
         do {
             hapticEngine = try CHHapticEngine()
 
-            // Handle engine reset (e.g., app backgrounded)
             hapticEngine?.resetHandler = { [weak self] in
-                print("🔄 Haptic engine reset")
                 self?.restartEngine()
             }
 
-            // Handle engine stopped unexpectedly
-            hapticEngine?.stoppedHandler = { [weak self] reason in
-                print("⚠️ Haptic engine stopped: \(reason)")
+            hapticEngine?.stoppedHandler = { [weak self] _ in
                 self?.restartEngine()
             }
 
             try hapticEngine?.start()
-            print("✅ Haptic engine started")
 
         } catch {
-            print("❌ Failed to create haptic engine: \(error)")
+            // Haptic engine unavailable on this device
         }
     }
 
@@ -90,7 +84,7 @@ class HapticFeedbackManager {
                 try startContinuousHaptics()
             }
         } catch {
-            print("❌ Failed to restart haptic engine: \(error)")
+            // Engine restart failed; will retry on next reset
         }
     }
 
@@ -98,20 +92,12 @@ class HapticFeedbackManager {
 
     /// Starts continuous haptic feedback
     func start() {
-        guard !isRunning else {
-            print("⚠️ Haptics already running")
-            return
-        }
-
-        print("🚀 Starting haptics...")
+        guard !isRunning else { return }
 
         do {
             try startContinuousHaptics()
             isRunning = true
-            print("✅ Continuous haptics started successfully")
         } catch {
-            print("❌ Core Haptics failed: \(error)")
-            print("⚡ Falling back to UIImpactFeedbackGenerator")
             startFallbackHaptics()
         }
     }
@@ -131,19 +117,17 @@ class HapticFeedbackManager {
             }
         }
 
-        print("✅ Fallback haptics started with timer")
     }
 
     /// Stops continuous haptic feedback
     func stop() {
         guard isRunning else { return }
 
-        // Stop Core Haptics
         do {
             try continuousPlayer?.stop(atTime: CHHapticTimeImmediate)
             continuousPlayer = nil
         } catch {
-            print("❌ Failed to stop continuous haptics: \(error)")
+            // Best-effort stop
         }
 
         // Stop fallback
@@ -156,7 +140,6 @@ class HapticFeedbackManager {
         renewalTimer = nil
 
         isRunning = false
-        print("🛑 Continuous haptics stopped")
     }
     
     /// Updates the proximity alert state
@@ -164,22 +147,12 @@ class HapticFeedbackManager {
     func updateProximityAlert(isClose: Bool) {
         if isClose {
             alertFrameCounter += 1
-            // print("⚠️ Alert counter: \(alertFrameCounter)")
         } else {
-            if alertFrameCounter > 0 {
-                // print("✅ Alert counter reset")
-            }
             alertFrameCounter = 0
-            if isAlertMode {
-                print("😅 Alert Mode DEACTIVATED")
-            }
             isAlertMode = false
         }
-        
+
         if alertFrameCounter >= 3 {
-            if !isAlertMode {
-                print("🚨 Alert Mode ACTIVATED")
-            }
             isAlertMode = true
         }
     }
@@ -187,10 +160,7 @@ class HapticFeedbackManager {
     /// Updates haptic intensity based on proximity value (1.0 = close, 0.0 = far)
     /// - Parameter depth: Normalized depth value where higher = closer
     func updateIntensity(forDepth depth: Float) {
-        guard isRunning else {
-            print("⚠️ Cannot update intensity - haptics not running")
-            return
-        }
+        guard isRunning else { return }
 
         var clampedIntensity: Float = 0.0
         
@@ -203,9 +173,6 @@ class HapticFeedbackManager {
             let intensity = minimumIntensity + (depth * (maximumIntensity - minimumIntensity))
             clampedIntensity = max(minimumIntensity, min(maximumIntensity, intensity))
         }
-
-        // DEBUG: Log intensity values
-        // print("🔊 Haptic intensity: \(clampedIntensity) (from depth: \(depth))")
 
         // Store for fallback generator
         currentDepth = clampedIntensity
@@ -224,7 +191,7 @@ class HapticFeedbackManager {
             do {
                 try player.sendParameters([intensityParameter], atTime: 0)
             } catch {
-                print("❌ Failed to update haptic intensity: \(error)")
+                // Parameter update failed; will retry next frame
             }
         }
         // Fallback generator updates happen automatically via timer
@@ -235,12 +202,7 @@ class HapticFeedbackManager {
     ///   - intensity: Haptic intensity (0.0-1.0)
     ///   - sharpness: Haptic sharpness (0.0-1.0)
     func fireTransientPulse(intensity: Float = 1.0, sharpness: Float = 1.0) {
-        guard let engine = hapticEngine else {
-            print("⚠️ Cannot fire pulse - haptic engine not available")
-            return
-        }
-
-        print("💥 Firing transient pulse (intensity: \(intensity), sharpness: \(sharpness))")
+        guard let engine = hapticEngine else { return }
 
         do {
             // Create sharp transient event
@@ -256,13 +218,10 @@ class HapticFeedbackManager {
             let pattern = try CHHapticPattern(events: [event], parameters: [])
             let player = try engine.makePlayer(with: pattern)
 
-            // Start immediately and let player auto-deallocate
             try player.start(atTime: CHHapticTimeImmediate)
 
-            print("💥 Transient pulse fired successfully")
-
         } catch {
-            print("❌ Failed to fire transient pulse: \(error)")
+            // Transient pulse failed; non-critical
         }
     }
 
@@ -273,9 +232,6 @@ class HapticFeedbackManager {
             throw HapticError.engineNotAvailable
         }
 
-        print("🔧 Creating continuous haptic pattern...")
-
-        // Create a continuous haptic event with a very long duration
         let intensity = CHHapticEventParameter(
             parameterID: .hapticIntensity,
             value: 0.5  // Start at medium intensity
@@ -294,23 +250,13 @@ class HapticFeedbackManager {
             duration: 30.0  // 30 seconds - maximum for continuous haptic events
         )
 
-        // Create pattern
         let pattern = try CHHapticPattern(
             events: [continuousEvent],
             parameters: []
         )
 
-        print("🔧 Creating advanced player...")
-
-        // Create player
         continuousPlayer = try engine.makeAdvancedPlayer(with: pattern)
-
-        print("🔧 Starting player...")
-
-        // Start playback immediately
         try continuousPlayer?.start(atTime: CHHapticTimeImmediate)
-
-        print("✅ Continuous haptic player started!")
 
         // Set up auto-renewal timer to restart before the 30s limit
         // Restart at 28s to give time for transition
@@ -326,18 +272,11 @@ class HapticFeedbackManager {
         renewalTimer = Timer.scheduledTimer(withTimeInterval: 28.0, repeats: true) { [weak self] _ in
             guard let self = self, self.isRunning else { return }
 
-            print("🔄 Renewing continuous haptic pattern...")
-
             do {
-                // Stop current player
                 try self.continuousPlayer?.stop(atTime: CHHapticTimeImmediate)
-
-                // Restart with new pattern
                 try self.startContinuousHaptics()
-
-                print("✅ Haptic pattern renewed successfully")
             } catch {
-                print("❌ Failed to renew haptic pattern: \(error)")
+                // Renewal failed; haptics may stop after 30s
             }
         }
     }
