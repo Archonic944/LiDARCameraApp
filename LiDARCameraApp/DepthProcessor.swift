@@ -141,23 +141,16 @@ class DepthProcessor {
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         let depthMap = convertedDepth.depthDataMap
 
-        guard let (p5, p95) = calculatePercentiles(from: depthMap) else {
-            print("⚠️ Could not calculate frame statistics")
-            return
-        }
+        guard let (p5, p95) = calculatePercentiles(from: depthMap) else { return }
 
-        // Set range based on percentiles (auto-fit to scene)
         minDisparity = p5
         maxDisparity = p95
-
-        print("🎯 Calibrated to scene: P5=\(String(format: "%.2f", p5))m, P95=\(String(format: "%.2f", p95))m (range: \(String(format: "%.2f", p95 - p5))m)")
     }
 
     /// Resets the depth range to default values
     func resetToDefaultRange() {
         minDisparity = DepthProcessor.defaultMinDepth
         maxDisparity = DepthProcessor.defaultMaxDepth
-        print("🔄 Reset to defaults: min=\(String(format: "%.2f", DepthProcessor.defaultMinDepth))m, max=\(String(format: "%.2f", DepthProcessor.defaultMaxDepth))m")
     }
 
     /// Calculates 5th and 95th percentiles from depth buffer
@@ -343,7 +336,6 @@ class DepthProcessor {
                 }
             }
             
-            print("🔍 Min valid depth in frame: \(String(format: "%.3f", minVal))m (Threshold: \(minDistance)m)")
             return found
         } else {
             // Fast mode: Early exit

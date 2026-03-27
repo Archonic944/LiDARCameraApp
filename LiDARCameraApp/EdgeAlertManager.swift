@@ -30,8 +30,8 @@ class EdgeAlertManager {
     // MARK: - Configuration
 
     /// Size of aperture region (fraction of frame width/height)
-    /// Default: 0.20 (20% of frame, matching depth aperture)
-    var apertureSize: CGFloat = 0.20
+    /// Default: 0.1 (smaller than depth aperture)
+    var apertureSize: CGFloat = 0.1
 
     /// Maximum distance to scan for edges (fraction of frame)
     /// Default: 0.40 (scan up to 40% of frame from aperture edge)
@@ -48,7 +48,7 @@ class EdgeAlertManager {
     /// Edge intensity threshold (0-1 range)
     /// Pixels below this value are not considered edges
     /// Default: 0.3 (30% intensity)
-    var edgeIntensityThreshold: Float = 0.3
+    var edgeIntensityThreshold: Float = 0.45
 
     /// Haptic intensity (0-1 range)
     /// Default: 1.0 (maximum intensity for sharp "stab" feel)

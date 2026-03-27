@@ -1,1 +1,11 @@
+# API keys / secrets (real file — template is tracked instead)
 LiDARCameraApp/Secrets.swift
+
+# Common secret file patterns
+*.secret
+*.secrets
+*.key
+*.keys
+.env
+.env.*
+*.pdf

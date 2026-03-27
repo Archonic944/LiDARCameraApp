@@ -130,8 +130,7 @@ class DepthVisualizer {
             }
         }
         
-        let avg = nonZeroCount > 0 ? sum / Float(nonZeroCount) : 0
-        print("[EdgeDebug] Max: \(String(format: "%.3f", maxVal)), Avg(NonZero): \(String(format: "%.3f", avg)), Coverage: \(String(format: "%.1f", (Float(nonZeroCount) / Float((width/10)*(height/10))) * 100))%")
+        _ = nonZeroCount > 0 ? sum / Float(nonZeroCount) : 0
     }
 
     // MARK: - Private Methods
